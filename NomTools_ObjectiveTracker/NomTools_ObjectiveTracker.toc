@@ -3,7 +3,7 @@
 ## Notes: Load-on-demand objective tracker module for NomTools.
 ## IconTexture: Interface\AddOns\NomTools\media\NomTools_Icon.png
 ## Author: Nomiis
-## Version: 1.0.2
+## Version: 1.1.0
 ## Dependencies: NomTools
 ## LoadOnDemand: 1
 

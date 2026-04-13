@@ -48,9 +48,9 @@ local BLIZZARD_FRAME_BACKGROUND_COLOR = {
     a = 0.98,
 }
 local BLIZZARD_FRAME_BORDER_COLOR = {
-    r = 0.28,
-    g = 0.30,
-    b = 0.34,
+    r = 0,
+    g = 0,
+    b = 0,
     a = 1,
 }
 
@@ -300,7 +300,7 @@ local function GetAppearanceSettings(settings)
                 profile.showAccent = profile.showAccent ~= false
             end
             profile.accentColor = NormalizeColor(profile.accentColor, profileDefaults.accentColor or { r = 0.96, g = 0.64, b = 0.22, a = 1 })
-            profile.backgroundColor = NormalizeColor(profile.backgroundColor, profileDefaults.backgroundColor or { r = 0, g = 0, b = 0, a = 1 })
+            profile.backgroundColor = NormalizeColor(profile.backgroundColor, profileDefaults.backgroundColor or { r = 0, g = 0, b = 0, a = 0.8 })
             profile.borderColor = NormalizeColor(profile.borderColor, profileDefaults.borderColor or BLIZZARD_FRAME_BORDER_COLOR)
             if type(profile.borderTexture) ~= "string" or profile.borderTexture == "" then
                 profile.borderTexture = profileDefaults.borderTexture or ns.GLOBAL_CHOICE_KEY
@@ -668,7 +668,7 @@ local function EnsureFrame()
     reminderFrame:RegisterForClicks("LeftButtonUp")
     reminderFrame:SetBackdrop(NOMTOOLS_FRAME_BACKDROP)
     reminderFrame:SetBackdropColor(0, 0, 0, FRAME_BG_ALPHA)
-    reminderFrame:SetBackdropBorderColor(0.28, 0.30, 0.34, 1)
+    reminderFrame:SetBackdropBorderColor(0, 0, 0, 1)
     reminderFrame:Hide()
 
     local backgroundTexture = reminderFrame:CreateTexture(nil, "BACKGROUND")

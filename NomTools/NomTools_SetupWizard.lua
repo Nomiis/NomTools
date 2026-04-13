@@ -46,21 +46,21 @@ do
             dbKey = "objectiveTracker",
             name = "Objective Tracker",
             releaseTag = "beta",
-            desc = "Adds a scrollbar and typography, colors, and organization customization to the quest tracker.",
+            desc = "Adds a scrollbar and typography, colors, search, filtering, organization customization and more to the quest tracker.",
         },
         {
             key = "consumables",
             dbKey = nil,
             name = "Consumables Reminder",
             releaseTag = "prerelease",
-            desc = "Shows clickable reminders for flasks, food, weapon buffs, and runes.",
+            desc = "Clickable icons for flasks, food, weapon buffs, runes and poisons.",
         },
         {
             key = "housing",
             dbKey = "housing",
             name = "Housing",
             releaseTag = "prerelease",
-            desc = "Tracks new housing items and improves inventory sorting.",
+            desc = "Tracks newly obtained housing decor and improves inventory sorting.",
         },
         {
             key = "worldQuests",
@@ -81,14 +81,14 @@ do
             dbPath = { "reminders" },
             name = "Reminders",
             releaseTag = "",
-            desc = "Dungeon difficulty, Great Vault, and Talent Loadout reminders for instance content.",
+            desc = "Various reminders for Talent Loadouts, Great Vault Spec, Dungeon Difficulty in groups, and similar.",
         },
         {
             key = "miscellaneous",
             dbKey = "miscellaneous",
             name = "Miscellaneous",
-            releaseTag = "",
-            desc = "Cutscene automation, menu bar positioning, and a customizable character stats display.",
+            releaseTag = "prerelease",
+            desc = "Skip seen cutscenes, separate Micro Menu Bar and Queue Eye, and a customizable character stats display.",
         },
     }
 

@@ -12,6 +12,60 @@ do
     -- Keep the newest entry first. This table is intended to be edited by hand.
     local CHANGELOG_ENTRIES = {
         {
+            id = 2026041401,
+            title = "1.2.0 - 14 April 2026",
+            description = "Objective Tracker gains search, filtering, and sorting, along with zone grouping. Housing gets an auto-confirm option and a multi-buy error fix.",
+            important = true,
+            sections = {
+                {
+                    title = "Objective Tracker",
+                    bullets = {
+                        { text = "Added search, filtering, and sorting to the objective tracker", new = true },
+                        { text = "Added an option to group quests by zone", new = true },
+                        "Fixed an issue causing the objective tracker to be wider than intended",
+                        "Fixed several visual inconsistencies and improved visuals",
+                    },
+                    new = {
+                        optionRows = {
+                            {
+                                page = "objective_tracker_general",
+                                label = "Filter Button",
+                            },
+                            {
+                                page = "objective_tracker_general",
+                                label = "Group Quests by Zone",
+                            },
+                            {
+                                page = "objective_tracker_sections",
+                                label = "Show Search Bar Section",
+                            },
+                        },
+                    },
+                },
+                {
+                    title = "Housing",
+                    bullets = {
+                        { text = "Added an option to auto-confirm decor purchases", new = true },
+                        "Potentially fixed an issue causing an error when multi-buying decor items",
+                    },
+                    new = {
+                        optionRows = {
+                            {
+                                page = "housing",
+                                label = "Auto-Confirm Decor Purchase Prompts",
+                            },
+                        },
+                    },
+                },
+                {
+                    title = "World Quests",
+                    bullets = {
+                        "Added a Reset Filters button to the filter dropdown",
+                    },
+                },
+            },
+        },
+        {
             id = 2026041301,
             title = "1.1.0 - 13 April 2026",
             description = "World Quests received major quality and performance fixes, with additional Objective Tracker, Classes, Housing, Miscellaneous, and Reminders updates.",
@@ -327,7 +381,8 @@ do
         local pageTags = {}
         local optionRowTags = {}
 
-        for _, entry in ipairs(CHANGELOG_ENTRIES) do
+        local entry = CHANGELOG_ENTRIES[1]
+        if entry then
             AddTagBlock(optionTags, pageTags, optionRowTags, entry.new)
 
             for _, section in ipairs(entry.sections or {}) do
@@ -353,6 +408,7 @@ do
     local function BuildEntryBodyText(entry)
         local lines = {}
         local bulletPrefix = "\226\128\162 "
+        local newTag = "|cffffd100[NEW]|r "
 
         for index, section in ipairs(entry and entry.sections or {}) do
             if type(section.title) == "string" and section.title ~= "" then
@@ -360,8 +416,21 @@ do
             end
 
             for _, bullet in ipairs(section.bullets or {}) do
-                if type(bullet) == "string" and bullet ~= "" then
-                    lines[#lines + 1] = bulletPrefix .. bullet
+                local bulletText, isNew
+                if type(bullet) == "table" then
+                    bulletText = bullet.text
+                    isNew = bullet.new == true
+                else
+                    bulletText = bullet
+                    isNew = false
+                end
+
+                if type(bulletText) == "string" and bulletText ~= "" then
+                    if isNew then
+                        lines[#lines + 1] = bulletPrefix .. newTag .. bulletText
+                    else
+                        lines[#lines + 1] = bulletPrefix .. bulletText
+                    end
                 end
             end
 

@@ -3,7 +3,7 @@
 ## Notes: Load-on-demand housing module for NomTools.
 ## IconTexture: Interface\AddOns\NomTools\media\NomTools_Icon.png
 ## Author: Nomiis
-## Version: 1.0.1
+## Version: 1.0.2
 ## Dependencies: NomTools
 ## LoadOnDemand: 1
 

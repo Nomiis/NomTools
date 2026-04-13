@@ -900,6 +900,49 @@ local function InstallMerchantHook()
     merchantFrameHooked = true
     hooksecurefunc("MerchantItemButton_OnModifiedClick", OnMerchantItemButtonModifiedClick)
 
+    -- Auto-confirm Blizzard purchase confirmation dialogs.
+    -- Case 1: always fires during an active multi-buy session (no item check needed,
+    --         all items in a session are already validated as housing decor).
+    -- Case 2: fires when the standalone autoConfirmDecorPurchase setting is enabled,
+    --         but only for decor items (verified via C_Item.IsDecorItem).
+    -- The item link is read from the popup's ItemFrame first; if not set (e.g. the
+    -- gold-cost confirmation dialog), it falls back to extracting it from the popup text.
+    hooksecurefunc("StaticPopup_Show", function(which)
+        if which ~= "CONFIRM_PURCHASE_TOKEN_ITEM"
+            and which ~= "CONFIRM_HIGH_COST_ITEM"
+            and which ~= "CONFIRM_PURCHASE_NONREFUNDABLE_ITEM" then
+            return
+        end
+        local popupFrame = StaticPopup_FindVisible and StaticPopup_FindVisible(which)
+        if not popupFrame then return end
+
+        -- Case 1: active multi-buy session — confirm immediately without item check.
+        if multiBuySession then
+            C_Timer.After(0, function()
+                popupFrame:GetButton1():Click()
+            end)
+            return
+        end
+
+        -- Case 2: standalone setting.
+        local s = GetSettings()
+        if not (s and s.autoConfirmDecorPurchase) then return end
+        if not (C_Item and C_Item.IsDecorItem) then return end
+        local itemLink = popupFrame.ItemFrame and popupFrame.ItemFrame.link
+        if not itemLink then
+            local textFrame = popupFrame.Text
+            if textFrame and textFrame.GetText then
+                local txt = textFrame:GetText()
+                if txt then itemLink = txt:match("|c.+|h|r") end
+            end
+        end
+        if not itemLink then return end
+        if not C_Item.IsDecorItem(itemLink) then return end
+        C_Timer.After(0, function()
+            popupFrame:GetButton1():Click()
+        end)
+    end)
+
     -- Cost frame: parented to StackSplitFrame so it moves and hides with it automatically.
     -- Anchored with its bottom-left at the top-left of StackSplitFrame, extending upward.
     if StackSplitFrame then
@@ -1226,4 +1269,12 @@ end
 
 function ns.RefreshHousingModule()
     UpdateHousingEventRegistration(IsHousingModuleActive())
+end
+
+function ns.ShowMultiBuyProgressPreview(itemName, bought, total)
+    UpdateMultiBuyProgress(itemName or "Rustic Armchair", bought, total)
+end
+
+function ns.HideMultiBuyProgressPreview()
+    HideMultiBuyProgress()
 end

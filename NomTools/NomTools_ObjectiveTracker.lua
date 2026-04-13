@@ -16,8 +16,8 @@ local ZONE_TRACKER_NAME = addonName .. "ZoneObjectiveTracker"
 local ZONE_TRACKER_HEADER = ZONE or "Zone"
 local TRACK_ALL_BUTTON_TEXT = QUEST_LOG_TRACK_ALL or "Track All"
 -- Frequently-referenced layout constants kept as top-level locals for readability.
-local TRACKER_SCROLL_CLIP_LEFT_PADDING = 30
-local TRACKER_MODULE_HEADER_RIGHT_EXTENSION = 6
+local TRACKER_SCROLL_CLIP_LEFT_PADDING = 20
+local TRACKER_MODULE_HEADER_RIGHT_EXTENSION = 0
 local DEFAULT_STATUSBAR_TEXTURE_PATH = "Interface\\TargetingFrame\\UI-StatusBar"
 
 -- All other constants live in a single table to stay under the 200-local chunk limit.
@@ -33,12 +33,12 @@ local K = {
     QUEST_LOG_BUTTON_WIDTH = 78,
     QUEST_LOG_BUTTON_HEIGHT = 20,
     SCROLL_BAR_DEFAULT_WIDTH = 4,
-    SCROLL_BAR_MIN_WIDTH = 4,
+    SCROLL_BAR_MIN_WIDTH = 1,
     SCROLL_BAR_MAX_WIDTH = 24,
     SCROLL_BAR_MIN_THUMB_HEIGHT = 24,
     TRACKER_RIGHT_INSET_PADDING = 10,
-    TRACKER_MAIN_HEADER_RIGHT_EXTENSION = 0,
     TRACKER_HEADER_BUTTON_RIGHT_INSET = 4,
+    TRACKER_VISUAL_LEFT_EXTENSION = 10,
     TRACKER_HEADER_TEXT = "Objective Tracker",
     LEVEL_PREFIX_MODE_ALL = "all",
     LEVEL_PREFIX_MODE_TRIVIAL = "trivial",
@@ -70,6 +70,18 @@ local K = {
         g = 0.88,
         b = 0.88,
         a = 0.9,
+    },
+    DEFAULT_SCROLL_BAR_BACKGROUND_COLOR = {
+        r = 0,
+        g = 0,
+        b = 0,
+        a = 0.8,
+    },
+    DEFAULT_SCROLL_BAR_BORDER_COLOR = {
+        r = 0,
+        g = 0,
+        b = 0,
+        a = 1,
     },
     DEFAULT_UNCOMPLETED_COLOR = {
         r = 1,
@@ -137,7 +149,33 @@ local K = {
         b = 0,
         a = 1,
     },
+    DEFAULT_ZONE_DIVIDER_BG_COLOR = {
+        r = 0.05,
+        g = 0.05,
+        b = 0.05,
+        a = 0.6,
+    },
+    DEFAULT_ZONE_DIVIDER_BORDER_COLOR = {
+        r = 0.3,
+        g = 0.3,
+        b = 0.3,
+        a = 1,
+    },
+    DEFAULT_ZONE_DIVIDER_TEXT_COLOR = {
+        r = 0.8,
+        g = 0.72,
+        b = 0.42,
+        a = 1,
+    },
+    DEFAULT_ZONE_DIVIDER_LINE_COLOR = {
+        r = 0.8,
+        g = 0.72,
+        b = 0.42,
+        a = 0.5,
+    },
 }
+K.GRADIENT_SOLID = CreateColor(1, 1, 1, 1)
+K.GRADIENT_TRANSPARENT = CreateColor(1, 1, 1, 0)
 K.DEFAULT_QUEST_KIND_TITLE_COLORS = {
     quest = {
         r = 1,
@@ -229,6 +267,7 @@ K.UIPANEL_BUTTON_ART_REGION_KEYS = {
 }
 
 K.DEFAULT_ORDER = {
+    "search",
     "scenario",
     "uiWidget",
     "focusedQuest",
@@ -303,6 +342,7 @@ K.ORDER_LABELS = {
     professionsRecipe = "Professions",
     bonusObjective = TRACKER_HEADER_BONUS_OBJECTIVES or "Bonus Objectives",
     worldQuest = TRACKER_HEADER_WORLD_QUESTS or "World Quests",
+    search = "Search",
 }
 
 K.ZONE_FILTER_LABELS = {
@@ -318,6 +358,48 @@ K.ZONE_FILTER_KEYS = {
     "worldQuests",
     "bonusObjectives",
 }
+
+K.SEARCH_FRAME_HEIGHT = 16
+K.SEARCH_DEBOUNCE_INTERVAL = 0.25
+K.SEARCH_PLACEHOLDER_TEXT = "Search quests..."
+
+K.FILTER_QUEST_TYPE_KEYS = {
+    "regular",
+    "campaign",
+    "daily",
+    "weekly",
+    "prey",
+    "legendary",
+    "important",
+    "meta",
+    "bonusObjective",
+    "worldQuest",
+}
+
+K.FILTER_QUEST_TYPE_LABELS = {
+    regular = "Regular",
+    campaign = TRACKER_HEADER_CAMPAIGN_QUESTS or "Campaign",
+    daily = DAILY or "Daily",
+    weekly = WEEKLY or "Weekly",
+    prey = "Prey",
+    legendary = "Legendary",
+    important = "Important",
+    meta = "Meta",
+    bonusObjective = TRACKER_HEADER_BONUS_OBJECTIVES or "Bonus Objectives",
+    worldQuest = TRACKER_HEADER_WORLD_QUESTS or "World Quests",
+}
+
+K.SORT_MODE_KEYS = {
+    "default",
+    "name",
+}
+
+K.SORT_MODE_LABELS = {
+    default = "Default (Blizzard)",
+    name = "Name (Alphabetical)",
+}
+
+K.FILTER_DROP_WIDTH = 200
 
 K.ZONE_TRACKER_SETTINGS = {
     headerText = ZONE_TRACKER_HEADER,
@@ -421,8 +503,14 @@ local state = {
     nomToolsEnforcingHeight = false,
     lastTrackerSizeWidth = nil,
     lastTrackerSizeHeight = nil,
-    lastPostLayoutTime = 0,
     postLayoutStyleDirty = true,
+    searchFrame = nil,
+    searchEditBox = nil,
+    searchText = "",
+    searchDebounceTimer = nil,
+    filterButton = nil,
+    filterDropFrame = nil,
+    filterDropCloseListener = nil,
 }
 
 local BuildTrackerStyleData
@@ -521,6 +609,7 @@ local function GetSettings()
     settings.scrollBar = settings.scrollBar or {}
     settings.progressBar = settings.progressBar or {}
     settings.appearance = settings.appearance or {}
+    settings.search = settings.search or {}
 
     local defaultFocusedQuest = ns.DEFAULTS and ns.DEFAULTS.objectiveTracker and ns.DEFAULTS.objectiveTracker.focusedQuest or {}
     if settings.focusedQuest.enabled == nil then
@@ -726,6 +815,17 @@ local function GetSettings()
         settings.scrollBar.color = CopyColor(K.DEFAULT_SCROLL_BAR_COLOR)
     end
 
+    if type(settings.scrollBar.backgroundColor) ~= "table" then
+        settings.scrollBar.backgroundColor = CopyColor(K.DEFAULT_SCROLL_BAR_BACKGROUND_COLOR)
+    end
+
+    if type(settings.scrollBar.borderColor) ~= "table" then
+        settings.scrollBar.borderColor = CopyColor(K.DEFAULT_SCROLL_BAR_BORDER_COLOR)
+    end
+    if settings.scrollBar.borderSize == nil then
+        settings.scrollBar.borderSize = K.DEFAULT_CHROME_BORDER_SIZE
+    end
+
     if type(settings.order) ~= "table" then
         settings.order = CopyArray(K.DEFAULT_ORDER)
     elseif DoesOrderMatchTemplate(settings.order, K.LEGACY_DEFAULT_ORDER) then
@@ -788,6 +888,32 @@ local function GetSettings()
             settings.buttons.questLogTrackAll = settings.buttons.trackAll ~= false
         else
             settings.buttons.questLogTrackAll = defaultButtons.trackAll ~= false
+        end
+    end
+
+    -- Migrate removed "completion" sort mode to "default".
+    if settings.filter and settings.filter.sortBy == "completion" then
+        settings.filter.sortBy = "default"
+    end
+
+    -- Migrate removed "trivial" quest type to separate showTrivial toggle.
+    if settings.filter and settings.filter.questTypes and settings.filter.questTypes.trivial then
+        settings.filter.questTypes.trivial = nil
+        if settings.filter.showTrivial == nil then
+            settings.filter.showTrivial = false
+        end
+    end
+
+    -- Migrate zone divider settings from filter to zoneDivider.
+    if settings.filter then
+        if not settings.zoneDivider then
+            settings.zoneDivider = {}
+        end
+        if settings.filter.zoneDividerAlign and not settings.zoneDivider.align then
+            settings.zoneDivider.align = settings.filter.zoneDividerAlign
+        end
+        if settings.filter.zoneDividerShowLines ~= nil and settings.zoneDivider.showLines == nil then
+            settings.zoneDivider.showLines = settings.filter.zoneDividerShowLines
         end
     end
 
@@ -959,6 +1085,11 @@ local function IsFocusedQuestEnabled(settings)
     return focusedQuest.enabled ~= false
 end
 
+local function IsSearchEnabled()
+    local search = GetSettings().search or {}
+    return search.enabled ~= false
+end
+
 local function IsScrollEnabled()
     return GetScrollBarSettings().enabled ~= false
 end
@@ -1023,6 +1154,11 @@ local function GetNormalizedOrder(order)
         seen.focusedQuest = true
     end
 
+    if not seen.search and K.ORDER_LABELS.search then
+        table.insert(normalized, 1, "search")
+        seen.search = true
+    end
+
     for _, key in ipairs(K.DEFAULT_ORDER) do
         if not seen[key] then
             normalized[#normalized + 1] = key
@@ -1065,7 +1201,9 @@ function ns.ResetObjectiveTrackerOrder()
 end
 
 local function GetModuleByKey(key)
-    if key == "focusedQuest" then
+    if key == "search" then
+        return state.searchFrame
+    elseif key == "focusedQuest" then
         return state.focusedQuestModule
     elseif key == "scenario" then
         return ScenarioObjectiveTracker
@@ -1105,7 +1243,9 @@ local function GetKeyForModule(module)
         return module.nomtoolsObjectiveTrackerKey
     end
 
-    if module == state.focusedQuestModule then
+    if module == state.searchFrame then
+        return "search"
+    elseif module == state.focusedQuestModule then
         return "focusedQuest"
     elseif module == ScenarioObjectiveTracker then
         return "scenario"
@@ -1501,6 +1641,8 @@ local function GetRecurringQuestType(questID)
         return "daily"
     end
 
+    -- Note: frequency is checked via C_QuestLog.GetInfo below
+
     if C_QuestLog and C_QuestLog.GetLogIndexForQuestID and C_QuestLog.GetInfo then
         local questLogIndex = C_QuestLog.GetLogIndexForQuestID(questID)
         if questLogIndex and questLogIndex > 0 then
@@ -1531,7 +1673,8 @@ local function GetRecurringQuestType(questID)
     end
 
     if C_QuestLog and C_QuestLog.IsRepeatableQuest and C_QuestLog.IsRepeatableQuest(questID) then
-        return "weekly"
+        -- Repeatable quests can be daily or weekly; without a reliable signal
+        -- fall through to the classification check below rather than guessing.
     end
 
     if Enum
@@ -2218,14 +2361,18 @@ function NomToolsZoneObjectiveTrackerMixin:LayoutContents()
 
     local campaignQuests, regularQuests = deps.buildZoneQuestLists()
     for _, quest in ipairs(campaignQuests) do
-        if not self:AddWatchedQuest(quest) then
-            return deps.finalizeModuleLayout(self)
+        if not ns.ShouldFilterQuest(quest:GetID(), quest) then
+            if not self:AddWatchedQuest(quest) then
+                return deps.finalizeModuleLayout(self)
+            end
         end
     end
 
     for _, quest in ipairs(regularQuests) do
-        if not self:AddWatchedQuest(quest) then
-            return deps.finalizeModuleLayout(self)
+        if not ns.ShouldFilterQuest(quest:GetID(), quest) then
+            if not self:AddWatchedQuest(quest) then
+                return deps.finalizeModuleLayout(self)
+            end
         end
     end
 
@@ -2239,6 +2386,7 @@ function NomToolsZoneObjectiveTrackerMixin:LayoutContents()
                     and QuestUtils_IsQuestWorldQuest(questID)
                     and not QuestUtils_IsQuestWatched(questID)
                     and deps.isZoneEligibleQuest(questID, "worldQuest")
+                    and not ns.ShouldFilterQuest(questID)
                 then
                     if not self:AddZoneTask(questID, "worldQuest", false) then
                         return deps.finalizeModuleLayout(self)
@@ -2249,7 +2397,7 @@ function NomToolsZoneObjectiveTrackerMixin:LayoutContents()
         
 
         for _, questID in ipairs(deps.getSortedTrackedWorldQuestIDs()) do
-            if deps.isZoneEligibleQuest(questID, "trackedWorldQuest") then
+            if deps.isZoneEligibleQuest(questID, "trackedWorldQuest") and not ns.ShouldFilterQuest(questID) then
                 if not self:AddZoneTask(questID, "worldQuest", true) then
                     return deps.finalizeModuleLayout(self)
                 end
@@ -2266,6 +2414,7 @@ function NomToolsZoneObjectiveTrackerMixin:LayoutContents()
                     and not QuestUtils_IsQuestWorldQuest(questID)
                     and not QuestUtils_IsQuestWatched(questID)
                     and deps.isZoneEligibleQuest(questID, "bonusObjective")
+                    and not ns.ShouldFilterQuest(questID)
                 then
                     if not self:AddZoneTask(questID, "bonusObjective") then
                         return deps.finalizeModuleLayout(self)
@@ -2332,6 +2481,7 @@ function NomToolsZoneObjectiveTrackerMixin:OnFreeBlock(block)
     block.nomtoolsQuestKind = nil
     block.numObjectives = nil
     block.taskName = nil
+    block.nomtoolsSortData = nil
 end
 
 local NomToolsFocusedQuestTrackerMixin = {}
@@ -2418,6 +2568,10 @@ function NomToolsFocusedQuestTrackerMixin:LayoutContents()
         return FinalizeModuleLayout(self)
     end
 
+    if ns.ShouldFilterQuest(focusedQuestID) then
+        return FinalizeModuleLayout(self)
+    end
+
     local quest = BuildRuntimeQuestEntry(focusedQuestID)
     local questKind = GetQuestKind(focusedQuestID, quest)
     if questKind == "quest" or questKind == "campaign" then
@@ -2475,6 +2629,677 @@ local function EnsureZoneModule()
     return zoneModule
 end
 
+do -- EnsureSearchFrame (scoped to avoid the 200-local-per-chunk limit)
+
+---@return table|nil searchFrame
+local function _CreateSearchFrame()
+    if not ObjectiveTrackerFrame then
+        return nil
+    end
+    if InCombatLockdown() then return nil end
+
+    local searchFrame = CreateFrame("Frame", addonName .. "ObjectiveTrackerSearchFrame", ObjectiveTrackerFrame)
+    searchFrame:SetHeight(K.SEARCH_FRAME_HEIGHT)
+    searchFrame.nomtoolsSearchFrame = true
+    searchFrame.nomtoolsObjectiveTrackerKey = "search"
+
+    local bg = searchFrame:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints(searchFrame)
+    bg:SetColorTexture(0, 0, 0, 0.1)
+    searchFrame.bg = bg
+
+    local borderFrame = CreateFrame("Frame", nil, searchFrame, BackdropTemplateMixin and "BackdropTemplate" or nil)
+    borderFrame:SetAllPoints(searchFrame)
+    borderFrame:SetFrameLevel((searchFrame:GetFrameLevel() or 0) + 1)
+    borderFrame:EnableMouse(false)
+    searchFrame.borderFrame = borderFrame
+
+    local editBox = CreateFrame("EditBox", nil, searchFrame, "InputBoxTemplate")
+    -- Chrome visibility is managed dynamically by ApplySearchBarSettings based on preset
+    editBox:SetAutoFocus(false)
+    editBox:ClearAllPoints()
+    editBox:SetPoint("TOPLEFT", searchFrame, "TOPLEFT", 8, 0)
+    editBox:SetPoint("BOTTOMRIGHT", searchFrame, "BOTTOMRIGHT", -8, 0)
+    editBox:SetFontObject(GameFontHighlightSmall)
+
+    local placeholder = editBox:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
+    placeholder:SetPoint("LEFT", editBox, "LEFT", 0, 0)
+    placeholder:SetText(K.SEARCH_PLACEHOLDER_TEXT)
+    editBox.placeholder = placeholder
+    searchFrame.editBox = editBox
+    searchFrame.placeholder = placeholder
+
+    editBox:SetScript("OnTextChanged", function(self)
+        local text = strtrim(self:GetText() or ""):lower()
+        state.searchText = text
+        if text == "" then
+            placeholder:Show()
+        else
+            placeholder:Hide()
+        end
+        if state.searchDebounceTimer then
+            state.searchDebounceTimer:Cancel()
+            state.searchDebounceTimer = nil
+        end
+        if text == "" then
+            RequestTrackerLayoutRefresh()
+            state.postLayoutStyleDirty = true
+        else
+            state.searchDebounceTimer = C_Timer.NewTimer(K.SEARCH_DEBOUNCE_INTERVAL, function()
+                state.searchDebounceTimer = nil
+                RequestTrackerLayoutRefresh()
+                state.postLayoutStyleDirty = true
+            end)
+        end
+    end)
+
+    editBox:SetScript("OnEscapePressed", function(self)
+        self:SetText("")
+        self:ClearFocus()
+    end)
+
+    state.searchFrame = searchFrame
+    state.searchEditBox = editBox
+    return searchFrame
+end
+
+ns.EnsureSearchFrame = function()
+    if state.searchFrame then
+        return state.searchFrame
+    end
+    return _CreateSearchFrame()
+end
+
+end -- do: EnsureSearchFrame
+
+do -- EnsureFilterButton / EnsureFilterDropdown (scoped to avoid the 200-local-per-chunk limit)
+
+local function GetFilterSettings()
+    local settings = GetSettings()
+    settings.filter = settings.filter or {}
+    return settings.filter
+end
+
+local function IsFilterButtonEnabled()
+    local b = GetSettings().buttons or {}
+    return b.filterButton ~= false
+end
+
+-- Tables to hold dropdown row buttons for checkmark updates.
+local typeButtons = {}
+local sortButtons = {}
+local directionButtons = {}
+local zoneDirectionButtons = {}
+local groupByZoneButton = nil
+local showTrivialButton = nil
+
+local function UpdateTypeChecks()
+    local filterSettings = GetFilterSettings()
+    local questTypes = filterSettings.questTypes or {}
+    for _, tb in ipairs(typeButtons) do
+        tb.checkmark:SetShown(not questTypes[tb.typeKey])
+    end
+end
+
+local function UpdateSortChecks()
+    local filterSettings = GetFilterSettings()
+    for _, sb in ipairs(sortButtons) do
+        sb.checkmark:SetShown(filterSettings.sortBy == sb.sortKey)
+    end
+end
+
+local function UpdateDirectionChecks()
+    local filterSettings = GetFilterSettings()
+    for _, db in ipairs(directionButtons) do
+        db.checkmark:SetShown(filterSettings.sortDirection == db.directionKey)
+    end
+end
+
+local function UpdateZoneDirectionChecks()
+    local filterSettings = GetFilterSettings()
+    local zoneSortDir = filterSettings.zoneSortDirection or "asc"
+    for _, db in ipairs(zoneDirectionButtons) do
+        db.checkmark:SetShown(zoneSortDir == db.directionKey)
+    end
+end
+
+local function UpdateGroupByZoneCheck()
+    if not groupByZoneButton then return end
+    local filterSettings = GetFilterSettings()
+    groupByZoneButton.checkmark:SetShown(filterSettings.groupByZone == true)
+end
+
+local function UpdateShowTrivialCheck()
+    if not showTrivialButton then return end
+    local filterSettings = GetFilterSettings()
+    showTrivialButton.checkmark:SetShown(filterSettings.showTrivial ~= false)
+end
+
+local function UpdateDirectionButtonsEnabled()
+    local fs = GetFilterSettings()
+    -- Quest sort direction: only relevant when sorting by name (not default)
+    local questEnabled = fs.sortBy ~= "default"
+    for _, db in ipairs(directionButtons) do
+        if questEnabled then
+            db:Enable()
+            db.label:SetTextColor(1, 1, 1, 1)
+        else
+            db:Disable()
+            db.label:SetTextColor(0.45, 0.45, 0.45, 1)
+        end
+    end
+    -- Zone sort direction: only relevant when zone grouping is on
+    local zoneEnabled = fs.groupByZone == true
+    for _, db in ipairs(zoneDirectionButtons) do
+        if zoneEnabled then
+            db:Enable()
+            db.label:SetTextColor(1, 1, 1, 1)
+        else
+            db:Disable()
+            db.label:SetTextColor(0.45, 0.45, 0.45, 1)
+        end
+    end
+end
+
+local function IsFilterDefault()
+    local fs = GetFilterSettings()
+    if fs.questTypes and next(fs.questTypes) then return false end
+    if fs.sortBy and fs.sortBy ~= "default" then return false end
+    if fs.sortDirection and fs.sortDirection ~= "asc" then return false end
+    if fs.groupByZone then return false end
+    if fs.zoneSortDirection and fs.zoneSortDirection ~= "asc" then return false end
+    if fs.showTrivial == false then return false end
+    return true
+end
+
+local function UpdateFilterResetState()
+    -- No-op: reset is now inside the dropdown menu
+end
+
+local function ResetFiltersToDefault()
+    local fs = GetFilterSettings()
+    wipe(fs)
+    UpdateTypeChecks()
+    UpdateSortChecks()
+    UpdateDirectionChecks()
+    UpdateZoneDirectionChecks()
+    UpdateDirectionButtonsEnabled()
+    UpdateGroupByZoneCheck()
+    UpdateShowTrivialCheck()
+    UpdateFilterResetState()
+    RequestTrackerLayoutRefresh()
+end
+
+---@param yPos number
+---@param text string
+---@param parent table
+---@return table header
+local function AddDropHeader(yPos, text, parent)
+    local lbl = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    lbl:SetPoint("TOPLEFT", parent, "TOPLEFT", 8, yPos)
+    lbl:SetText(text)
+    lbl:SetTextColor(0.8, 0.72, 0.42)
+    return lbl
+end
+
+---@param anchor table
+---@param yOff number
+---@param labelText string
+---@param onClick function
+---@param parent table
+---@return table btn
+local function AddDropButton(anchor, yOff, labelText, onClick, parent)
+    local btn = CreateFrame("Button", nil, parent)
+    btn:SetHeight(18)
+    btn:SetPoint("TOP",   anchor, "BOTTOM",  0, yOff)
+    btn:SetPoint("LEFT",  parent, "LEFT",    4, 0)
+    btn:SetPoint("RIGHT", parent, "RIGHT",  -4, 0)
+
+    local check = btn:CreateTexture(nil, "ARTWORK")
+    check:SetSize(14, 14)
+    check:SetPoint("LEFT", btn, "LEFT", 10, 0)
+    check:SetAtlas("checkmark-minimal")
+    check:Hide()
+    btn.checkmark = check
+
+    local lbl = btn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    lbl:SetPoint("LEFT", check, "RIGHT", 4, 0)
+    lbl:SetPoint("RIGHT", btn, "RIGHT", -8, 0)
+    lbl:SetJustifyH("LEFT")
+    lbl:SetText(labelText)
+    btn.label = lbl
+
+    btn:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestLogTitleHighlight", "ADD")
+    btn:SetScript("OnClick", onClick)
+    return btn
+end
+
+---@param parent table
+---@return table divider
+local function AddDivider(parent, curY)
+    local div = parent:CreateTexture(nil, "ARTWORK")
+    div:SetHeight(1)
+    div:SetPoint("TOPLEFT",  parent, "TOPLEFT",  8, curY - 4)
+    div:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -8, curY - 4)
+    div:SetColorTexture(0.3, 0.3, 0.3, 0.8)
+    return div
+end
+
+ns.EnsureFilterDropdown = function()
+    if InCombatLockdown() then return nil end
+    if state.filterDropFrame then
+        return state.filterDropFrame
+    end
+    if not ObjectiveTrackerFrame or not ObjectiveTrackerFrame.Header then
+        return nil
+    end
+
+    local header = ObjectiveTrackerFrame.Header
+    local dropFrame = CreateFrame("Frame", addonName .. "ObjectiveTrackerFilterDrop",
+                                  ObjectiveTrackerFrame, "BackdropTemplate")
+    dropFrame:SetBackdrop({
+        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
+        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+        tile = true, tileSize = 32, edgeSize = 16,
+        insets = { left = 4, right = 4, top = 4, bottom = 4 },
+    })
+    dropFrame:SetWidth(K.FILTER_DROP_WIDTH)
+    dropFrame:SetPoint("TOPRIGHT", header, "BOTTOMRIGHT", 0, -2)
+    dropFrame:SetFrameStrata("DIALOG")
+    dropFrame:SetFrameLevel(100)
+    dropFrame:Hide()
+    dropFrame:EnableMouse(true)
+
+    -- Close listener — fullscreen invisible frame behind dropdown
+    local dropCloseListener = CreateFrame("Frame", nil, UIParent)
+    dropCloseListener:EnableMouse(true)
+    dropCloseListener:SetAllPoints(UIParent)
+    dropCloseListener:SetFrameStrata("DIALOG")
+    dropCloseListener:SetFrameLevel(50)
+    dropCloseListener:Hide()
+    dropCloseListener:SetScript("OnMouseDown", function()
+        dropFrame:Hide()
+        dropCloseListener:Hide()
+    end)
+
+    local filterSettings = GetFilterSettings()
+    local curY = -8
+
+    -- ── Section 1: Quest Types (multi-select, exclusion-set) ──────────
+    local typeHeader = AddDropHeader(curY, "Quest Types", dropFrame)
+    curY = curY - 18
+
+    local lastTypeAnchor = typeHeader
+    for _, key in ipairs(K.FILTER_QUEST_TYPE_KEYS) do
+        local lbl = K.FILTER_QUEST_TYPE_LABELS[key] or key
+        local tb = AddDropButton(lastTypeAnchor, -2, lbl, function()
+            local fs = GetFilterSettings()
+            fs.questTypes = fs.questTypes or {}
+            if fs.questTypes[key] then
+                fs.questTypes[key] = nil
+            else
+                fs.questTypes[key] = true
+            end
+            UpdateTypeChecks()
+            UpdateFilterResetState()
+            RequestTrackerLayoutRefresh()
+        end, dropFrame)
+        tb.typeKey = key
+        typeButtons[#typeButtons + 1] = tb
+        lastTypeAnchor = tb
+        curY = curY - 20
+    end
+
+    AddDivider(dropFrame, curY)
+    curY = curY - 12
+
+    -- ── Section 2: Other Filters ──────────────────────────────────────
+    local otherHeader = AddDropHeader(curY, "Other Filters", dropFrame)
+    curY = curY - 18
+
+    showTrivialButton = AddDropButton(otherHeader, -2, "Show Trivial Quests", function()
+        local fs = GetFilterSettings()
+        fs.showTrivial = fs.showTrivial == false
+        UpdateShowTrivialCheck()
+        UpdateFilterResetState()
+        RequestTrackerLayoutRefresh()
+    end, dropFrame)
+    curY = curY - 20
+
+    AddDivider(dropFrame, curY)
+    curY = curY - 12
+
+    -- ── Section 3: Sort By (radio) ────────────────────────────────────
+    local sortHeader = AddDropHeader(curY, "Sort By", dropFrame)
+    curY = curY - 18
+
+    local lastSortAnchor = sortHeader
+    for _, key in ipairs(K.SORT_MODE_KEYS) do
+        local lbl = K.SORT_MODE_LABELS[key] or key
+        local sb = AddDropButton(lastSortAnchor, -2, lbl, function()
+            local fs = GetFilterSettings()
+            fs.sortBy = key
+            UpdateSortChecks()
+            UpdateDirectionButtonsEnabled()
+            UpdateFilterResetState()
+            RequestTrackerLayoutRefresh()
+        end, dropFrame)
+        sb.sortKey = key
+        sortButtons[#sortButtons + 1] = sb
+        lastSortAnchor = sb
+        curY = curY - 20
+    end
+
+    AddDivider(dropFrame, curY)
+    curY = curY - 12
+
+    -- ── Section 4: Quest Sort Direction (radio) ─────────────────────────────
+    local dirHeader = AddDropHeader(curY, "Quest Sort Direction", dropFrame)
+    curY = curY - 18
+
+    local DIRECTION_DEFS = {
+        { key = "asc",  label = "Ascending" },
+        { key = "desc", label = "Descending" },
+    }
+
+    local lastDirAnchor = dirHeader
+    for _, def in ipairs(DIRECTION_DEFS) do
+        local db = AddDropButton(lastDirAnchor, -2, def.label, function()
+            local fs = GetFilterSettings()
+            fs.sortDirection = def.key
+            UpdateDirectionChecks()
+            UpdateFilterResetState()
+            RequestTrackerLayoutRefresh()
+        end, dropFrame)
+        db.directionKey = def.key
+        directionButtons[#directionButtons + 1] = db
+        lastDirAnchor = db
+        curY = curY - 20
+    end
+
+    AddDivider(dropFrame, curY)
+    curY = curY - 12
+
+    -- ── Section 5: Group By Zone (single checkbox) ────────────────────
+    local groupHeader = AddDropHeader(curY, "Group By Zone", dropFrame)
+    curY = curY - 18
+
+    groupByZoneButton = AddDropButton(groupHeader, -2, "Separate by Zone", function()
+        local fs = GetFilterSettings()
+        fs.groupByZone = not fs.groupByZone
+        UpdateGroupByZoneCheck()
+        UpdateDirectionButtonsEnabled()
+        UpdateFilterResetState()
+        RequestTrackerLayoutRefresh()
+    end, dropFrame)
+    curY = curY - 20
+
+    AddDivider(dropFrame, curY)
+    curY = curY - 12
+
+    -- ── Section 6: Zone Sort Direction (radio) ───────────────────────
+    local zoneDirHeader = AddDropHeader(curY, "Zone Sort Direction", dropFrame)
+    curY = curY - 18
+
+    local lastZoneDirAnchor = zoneDirHeader
+    for _, def in ipairs(DIRECTION_DEFS) do
+        local zdb = AddDropButton(lastZoneDirAnchor, -2, def.label, function()
+            local fs = GetFilterSettings()
+            fs.zoneSortDirection = def.key
+            UpdateZoneDirectionChecks()
+            UpdateFilterResetState()
+            RequestTrackerLayoutRefresh()
+        end, dropFrame)
+        zdb.directionKey = def.key
+        zoneDirectionButtons[#zoneDirectionButtons + 1] = zdb
+        lastZoneDirAnchor = zdb
+        curY = curY - 20
+    end
+
+    -- ── Reset Filters button at bottom ────────────────────────────────
+    AddDivider(dropFrame, curY)
+    curY = curY - 12
+
+    local resetBtn = CreateFrame("Button", nil, dropFrame)
+    resetBtn:SetHeight(20)
+    resetBtn:SetPoint("TOPLEFT", dropFrame, "TOPLEFT", 8, curY)
+    resetBtn:SetPoint("TOPRIGHT", dropFrame, "TOPRIGHT", -8, curY)
+    local resetLabel = resetBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    resetLabel:SetPoint("CENTER")
+    resetLabel:SetText(RESET)
+    resetLabel:SetTextColor(1, 0.82, 0)
+    resetBtn:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestLogTitleHighlight", "ADD")
+    resetBtn:SetScript("OnClick", function()
+        ResetFiltersToDefault()
+        PlaySound(SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON)
+    end)
+    resetBtn:SetScript("OnEnter", function(self)
+        if IsFilterDefault() then
+            resetLabel:SetTextColor(0.5, 0.5, 0.5)
+        else
+            resetLabel:SetTextColor(1, 1, 1)
+        end
+    end)
+    resetBtn:SetScript("OnLeave", function()
+        resetLabel:SetTextColor(1, 0.82, 0)
+    end)
+    state.filterResetButton = resetBtn
+    curY = curY - 22
+
+    dropFrame:SetHeight(math.abs(curY) + 12)
+
+    state.filterDropFrame = dropFrame
+    state.filterDropCloseListener = dropCloseListener
+
+    dropFrame:SetScript("OnHide", function()
+        state.filterDropCloseListener:Hide()
+    end)
+
+    return dropFrame
+end
+
+ns.EnsureFilterButton = function()
+    if state.filterButton then
+        return state.filterButton
+    end
+    if not ObjectiveTrackerFrame or not ObjectiveTrackerFrame.Header then
+        return nil
+    end
+    if InCombatLockdown() then return nil end
+
+    local header = ObjectiveTrackerFrame.Header
+    local button = CreateFrame("Button", nil, header)
+    button:SetSize(18, 19)
+
+    button:SetPoint("RIGHT", header.MinimizeButton or header, "LEFT", -4, 0)
+
+    local icon = button:CreateTexture(nil, "ARTWORK")
+    icon:SetSize(18, 19)
+    icon:SetPoint("CENTER")
+    icon:SetAtlas("ui-questtrackerbutton-filter", false)
+    button.icon = icon
+
+    button:SetScript("OnMouseDown", function(self)
+        if self.icon then
+            self.icon:SetAtlas("ui-questtrackerbutton-filter-pressed", true)
+        end
+    end)
+    button:SetScript("OnMouseUp", function(self)
+        if self.icon then
+            self.icon:SetAtlas("ui-questtrackerbutton-filter", true)
+        end
+    end)
+    button:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Quest Filter", 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    button:HookScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+    button:SetScript("OnClick", function()
+        local dropFrame = ns.EnsureFilterDropdown()
+        if not dropFrame then return end
+        if dropFrame:IsShown() then
+            dropFrame:Hide()
+            if state.filterDropCloseListener then
+                state.filterDropCloseListener:Hide()
+            end
+        else
+            UpdateTypeChecks()
+            UpdateSortChecks()
+            UpdateDirectionChecks()
+            UpdateZoneDirectionChecks()
+            UpdateDirectionButtonsEnabled()
+            UpdateGroupByZoneCheck()
+            UpdateShowTrivialCheck()
+            dropFrame:Show()
+            if state.filterDropCloseListener then
+                state.filterDropCloseListener:Show()
+            end
+        end
+    end)
+
+
+    state.filterButton = button
+    return button
+end
+
+ns.RefreshFilterButton = function()
+    local button = ns.EnsureFilterButton()
+    if not button then
+        return
+    end
+
+    local shouldShow = IsFilterButtonEnabled()
+        and IsModuleEnabled()
+        and ObjectiveTrackerFrame
+        and ObjectiveTrackerFrame.Header
+        and ObjectiveTrackerFrame.Header:IsShown()
+    if InCombatLockdown() then return end
+    button:SetShown(shouldShow)
+    UpdateFilterResetState()
+
+    -- Re-anchor in case the tracker button visibility changed.
+    button:ClearAllPoints()
+    local anchorTo = ObjectiveTrackerFrame.Header.MinimizeButton or ObjectiveTrackerFrame.Header
+    button:SetPoint("RIGHT", anchorTo, "LEFT", -4, 0)
+end
+
+end -- do: EnsureFilterButton / EnsureFilterDropdown
+
+do -- ShouldFilterQuest (scoped to stay under 200-local chunk limit)
+
+---@param questID number
+---@param quest table|nil
+---@return boolean shouldHide true if the quest should be filtered out
+ns.ShouldFilterQuest = function(questID, quest)
+    if not IsModuleEnabled() then
+        return false
+    end
+
+    local settings = GetSettings()
+    settings.filter = settings.filter or {}
+    local filterSettings = settings.filter
+    local questTypes = filterSettings.questTypes or {}
+    local searchText = state.searchText
+
+    -- Classify quest into a type key (priority matches the title color system).
+    local typeKey
+    local isTrivial = IsTrivialQuest(questID)
+    if IsPreyQuest(questID) then
+        typeKey = "prey"
+    else
+        local recurring = GetRecurringQuestType(questID)
+        if recurring then
+            typeKey = recurring -- "daily" or "weekly"
+        else
+            local classification = GetQuestClassification(questID, quest)
+            if classification and Enum and Enum.QuestClassification then
+                if classification == Enum.QuestClassification.Meta then
+                    typeKey = "meta"
+                elseif classification == Enum.QuestClassification.Legendary then
+                    typeKey = "legendary"
+                elseif classification == Enum.QuestClassification.Campaign then
+                    typeKey = "campaign"
+                elseif classification == Enum.QuestClassification.Important then
+                    typeKey = "important"
+                end
+            end
+            if not typeKey then
+                local kind = GetQuestKind(questID, quest)
+                if kind == "campaign" then
+                    typeKey = "campaign"
+                elseif kind == "worldQuest" then
+                    typeKey = "worldQuest"
+                elseif kind == "bonusObjective" then
+                    typeKey = "bonusObjective"
+                else
+                    typeKey = "regular"
+                end
+            end
+        end
+    end
+
+    -- (a) Quest type exclusion filter.
+    if typeKey and questTypes[typeKey] then
+        return true
+    end
+
+    -- (a2) Trivial filter (independent of type classification).
+    if isTrivial and filterSettings.showTrivial == false then
+        return true
+    end
+
+    -- (b) Search text filter.
+    if searchText and searchText ~= "" then
+        local title = GetQuestHeaderTitle(questID)
+        if title and title:lower():find(searchText, 1, true) then
+            return false
+        end
+
+        local label = K.FILTER_QUEST_TYPE_LABELS[typeKey]
+        if label and label:lower():find(searchText, 1, true) then
+            return false
+        end
+
+        if isTrivial and ("trivial"):find(searchText, 1, true) then
+            return false
+        end
+
+        if GetQuestObjectiveInfo then
+            for i = 1, 10 do
+                local text = GetQuestObjectiveInfo(questID, i, false)
+                if not text then break end
+                if text:lower():find(searchText, 1, true) then
+                    return false
+                end
+            end
+        end
+
+        -- Zone name match
+        do
+            local mapID = C_TaskQuest and C_TaskQuest.GetQuestZoneID and C_TaskQuest.GetQuestZoneID(questID) or nil
+            if not mapID or mapID == 0 then
+                mapID = GetQuestUiMapID and GetQuestUiMapID(questID, true) or nil
+            end
+            if mapID and mapID ~= 0 then
+                local mapInfo = C_Map and C_Map.GetMapInfo and C_Map.GetMapInfo(mapID) or nil
+                local zoneName = mapInfo and mapInfo.name or nil
+                if zoneName and zoneName:lower():find(searchText, 1, true) then
+                    return false
+                end
+            end
+        end
+
+        return true
+    end
+
+    return false
+end
+
+end -- do: ShouldFilterQuest
+
 local function InstallTrackerHooks()
     if state.trackerHooksInstalled or not QuestObjectiveTrackerMixin or not CampaignQuestObjectiveTrackerMixin or not WorldQuestObjectiveTrackerMixin or not BonusObjectiveTrackerMixin then
 
@@ -2494,7 +3319,10 @@ local function InstallTrackerHooks()
             return true
         end
 
-        return not IsZoneEligibleQuest(quest:GetID(), "quest")
+        local questID = quest:GetID()
+        if IsZoneEligibleQuest(questID, "quest") then return false end
+        if ns.ShouldFilterQuest(questID, quest) then return false end
+        return true
     end
     if QuestObjectiveTracker then
         QuestObjectiveTracker.ShouldDisplayQuest = QuestObjectiveTrackerMixin.ShouldDisplayQuest
@@ -2511,7 +3339,10 @@ local function InstallTrackerHooks()
             return true
         end
 
-        return not IsZoneEligibleQuest(quest:GetID(), "campaign")
+        local questID = quest:GetID()
+        if IsZoneEligibleQuest(questID, "campaign") then return false end
+        if ns.ShouldFilterQuest(questID, quest) then return false end
+        return true
     end
     if CampaignQuestObjectiveTracker then
         CampaignQuestObjectiveTracker.ShouldDisplayQuest = CampaignQuestObjectiveTrackerMixin.ShouldDisplayQuest
@@ -2519,8 +3350,9 @@ local function InstallTrackerHooks()
 
     state.originalBonusAddQuest = BonusObjectiveTrackerMixin.AddQuest
     BonusObjectiveTrackerMixin.AddQuest = function(self, questID, isTrackedWorldQuest)
-        if self == BonusObjectiveTracker and IsModuleEnabled() and IsZoneEligibleQuest(questID, "bonusObjective") then
-            return true
+        if self == BonusObjectiveTracker and IsModuleEnabled() then
+            if IsZoneEligibleQuest(questID, "bonusObjective") then return true end
+            if ns.ShouldFilterQuest(questID) then return true end
         end
 
         return state.originalBonusAddQuest(self, questID, isTrackedWorldQuest)
@@ -2542,6 +3374,9 @@ local function InstallTrackerHooks()
             -- entry, without waiting for the server isInArea flag to propagate).
             local eligibleType = isTrackedWorldQuest and "trackedWorldQuest" or "worldQuest"
             if IsZoneEligibleQuest(questID, eligibleType) then
+                return true
+            end
+            if ns.ShouldFilterQuest(questID) then
                 return true
             end
         end
@@ -2577,6 +3412,10 @@ local function GetOrderedContainerModules()
         modules[#modules + 1] = module
     end
 
+    if state.searchFrame and state.searchFrame.uiOrder then
+        modules[#modules + 1] = state.searchFrame
+    end
+
     table.sort(modules, moduleOrderComparator)
 
     return modules
@@ -2588,9 +3427,13 @@ local function BuildOrderedModules(includeCustomModules)
     local order = GetNormalizedOrder(GetSettings().order)
 
     for _, key in ipairs(order) do
-        local includeKey = ((key ~= "zone" and key ~= "focusedQuest") or includeCustomModules)
+        local includeKey = ((key ~= "zone" and key ~= "focusedQuest" and key ~= "search") or includeCustomModules)
             and (key ~= "focusedQuest" or IsFocusedQuestEnabled())
+            and (key ~= "search" or IsSearchEnabled())
         if includeKey then
+            if key == "search" then
+                ns.EnsureSearchFrame()
+            end
             local module = GetModuleByKey(key)
             if module and not seen[module] then
                 modules[#modules + 1] = module
@@ -2600,9 +3443,13 @@ local function BuildOrderedModules(includeCustomModules)
     end
 
     for _, key in ipairs(K.DEFAULT_ORDER) do
-        local includeKey = ((key ~= "zone" and key ~= "focusedQuest") or includeCustomModules)
+        local includeKey = ((key ~= "zone" and key ~= "focusedQuest" and key ~= "search") or includeCustomModules)
             and (key ~= "focusedQuest" or IsFocusedQuestEnabled())
+            and (key ~= "search" or IsSearchEnabled())
         if includeKey then
+            if key == "search" then
+                ns.EnsureSearchFrame()
+            end
             local module = GetModuleByKey(key)
             if module and not seen[module] then
                 modules[#modules + 1] = module
@@ -2823,13 +3670,14 @@ end
 
 -- Returns the effective top padding for content modules.  When the main header
 -- is disabled by the player we collapse this to zero so there is no gap at the
--- top of the tracker; otherwise we respect Blizzard's value (= header height).
+-- top of the tracker; otherwise we use the actual rendered pixel height of the
+-- header frame so the clip frame starts exactly at the header's bottom edge.
 local function GetEffectiveTopPadding()
     local header = ObjectiveTrackerFrame and ObjectiveTrackerFrame.Header or nil
     if not header or not header.IsShown or not header:IsShown() then
         return 0
     end
-    return ObjectiveTrackerFrame and ObjectiveTrackerFrame.topModulePadding or 0
+    return (header.GetHeight and header:GetHeight()) or ObjectiveTrackerFrame.topModulePadding or 0
 end
 
 local layoutScratch = {}
@@ -2850,11 +3698,14 @@ local function BuildVisibleModuleLayout()
     local contentHeight = topPadding
     local hasVisibleModules = false
 
+    local prevModuleInHeight
     for _, module in ipairs(GetOrderedContainerModules()) do
         local moduleHeight = GetModuleEffectiveHeight(module)
         if moduleHeight > 0 then
             if hasVisibleModules then
-                contentHeight = contentHeight + moduleSpacing
+                local prevCollapsed = prevModuleInHeight and prevModuleInHeight.IsCollapsed and prevModuleInHeight:IsCollapsed()
+                local spacingY = (module.nomtoolsSearchFrame or (prevModuleInHeight and prevModuleInHeight.nomtoolsSearchFrame) or prevCollapsed) and 0 or moduleSpacing
+                contentHeight = contentHeight + spacingY
             end
 
             local top = contentHeight
@@ -2873,6 +3724,7 @@ local function BuildVisibleModuleLayout()
 
             contentHeight = bottom
             hasVisibleModules = true
+            prevModuleInHeight = module
         end
     end
 
@@ -2986,7 +3838,7 @@ local function RefreshScrollClipFrame()
     clipFrame:SetFrameLevel(contentFrameLevel)
     clipFrame:ClearAllPoints()
     clipFrame:SetPoint("TOPLEFT", ObjectiveTrackerFrame, "TOPLEFT", -TRACKER_SCROLL_CLIP_LEFT_PADDING, -topPadding)
-    clipFrame:SetPoint("BOTTOMRIGHT", ObjectiveTrackerFrame, "BOTTOMRIGHT", 0, 0)
+    clipFrame:SetPoint("BOTTOMRIGHT", ObjectiveTrackerFrame, "BOTTOMRIGHT", TRACKER_MODULE_HEADER_RIGHT_EXTENSION, 0)
     clipFrame:SetShown(IsModuleEnabled())
     clipFrame:SetClipsChildren(IsModuleEnabled())
     return clipFrame
@@ -3029,8 +3881,9 @@ local function ApplyModuleAnchors()
     local moduleFrameLevel = (clipFrame:GetFrameLevel() or 0) + 1
 
     for _, module in ipairs(GetOrderedContainerModules()) do
-        local moduleHeight = GetModuleEffectiveHeight(module)
-        if moduleHeight > 0 then
+        local isSearch = module.nomtoolsSearchFrame
+        local moduleHeight = isSearch and K.SEARCH_FRAME_HEIGHT or GetModuleEffectiveHeight(module)
+        if moduleHeight > 0 and (not isSearch or IsSearchEnabled()) then
             if module:GetParent() ~= clipFrame then
                 module:SetParent(clipFrame)
             end
@@ -3041,20 +3894,31 @@ local function ApplyModuleAnchors()
                 module:SetFrameLevel(moduleFrameLevel)
             end
 
-            PrepareModuleForLayout(module)
+            if not isSearch then
+                PrepareModuleForLayout(module)
+            end
 
             module:ClearAllPoints()
             local leftMargin = module.leftMargin or 0
             local rightInset = state.currentRightInset or 0
             if previousModule then
                 local previousLeftMargin = previousModule.leftMargin or 0
-                module:SetPoint("TOPLEFT", previousModule, "BOTTOMLEFT", leftMargin - previousLeftMargin, -moduleSpacing)
-                module:SetPoint("TOPRIGHT", previousModule, "BOTTOMRIGHT", 0, -moduleSpacing)
+                local prevCollapsed = previousModule.IsCollapsed and previousModule:IsCollapsed()
+                local spacingY = (isSearch or (previousModule and previousModule.nomtoolsSearchFrame) or prevCollapsed) and 0 or moduleSpacing
+                module:SetPoint("TOPLEFT", previousModule, "BOTTOMLEFT", leftMargin - previousLeftMargin, -spacingY)
+                module:SetPoint("TOPRIGHT", previousModule, "BOTTOMRIGHT", 0, -spacingY)
             else
                 module:SetPoint("TOPLEFT", clipFrame, "TOPLEFT", TRACKER_SCROLL_CLIP_LEFT_PADDING + leftMargin, state.scrollOffset or 0)
-                module:SetPoint("TOPRIGHT", clipFrame, "TOPRIGHT", -rightInset, state.scrollOffset or 0)
+                module:SetPoint("TOPRIGHT", clipFrame, "TOPRIGHT", -rightInset - TRACKER_MODULE_HEADER_RIGHT_EXTENSION, state.scrollOffset or 0)
             end
+
+            if isSearch then
+                module:Show()
+            end
+
             previousModule = module
+        elseif isSearch then
+            module:Hide()
         end
     end
 
@@ -3068,6 +3932,586 @@ local function ApplyModuleAnchors()
         end
     end
 end
+
+do -- SortModuleBlocks (scoped to avoid the 200-local-per-chunk limit)
+
+local SORTABLE_MODULE_KEYS = {
+    quest = true,
+    campaign = true,
+    zone = true,
+    focusedQuest = true,
+    bonusObjective = true,
+    worldQuest = true,
+}
+
+local sortScratch = {}
+local sortPassID = 0
+
+local function GetZoneDividerSettings()
+    local settings = GetSettings()
+    return settings and settings.zoneDivider or {}
+end
+
+local function GetSearchBarSettings()
+    local settings = GetSettings()
+    return settings and settings.search or {}
+end
+
+---@param questID number
+---@return string
+local function GetQuestZoneName(questID)
+    if type(questID) ~= "number" then
+        return ""
+    end
+    local mapID = C_TaskQuest and C_TaskQuest.GetQuestZoneID and C_TaskQuest.GetQuestZoneID(questID) or nil
+    if not mapID or mapID == 0 then
+        mapID = GetQuestUiMapID and GetQuestUiMapID(questID, true) or nil
+    end
+    if not mapID or mapID == 0 then
+        return ""
+    end
+    local info = C_Map and C_Map.GetMapInfo and C_Map.GetMapInfo(mapID) or nil
+    return info and info.name or ""
+end
+
+---@param block table
+---@return table
+local function GetBlockSortData(block)
+    local cached = block.nomtoolsSortData
+    if cached and cached.passID == sortPassID then
+        return cached
+    end
+    if not cached then
+        cached = {}
+        block.nomtoolsSortData = cached
+    end
+    cached.passID = sortPassID
+    cached.block = block
+    local questID = block.id or block.questID or block.poiQuestID or 0
+    cached.questID = questID
+    cached.title = (block.HeaderText and block.HeaderText.GetText and block.HeaderText:GetText()) or GetQuestHeaderTitle(questID) or ""
+    cached.zoneName = GetQuestZoneName(questID)
+    return cached
+end
+
+local function AcquireZoneDivider(module, index)
+    local pool = module.nomtoolsZoneDividers
+    if not pool then
+        pool = {}
+        module.nomtoolsZoneDividers = pool
+    end
+    local divider = pool[index]
+    if divider then
+        divider:Show()
+        return divider
+    end
+    local parent = module.ContentsFrame or module
+    divider = CreateFrame("Frame", nil, parent, BackdropTemplateMixin and "BackdropTemplate" or nil)
+
+    local label = divider:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    divider.label = label
+
+    local lineLeft = divider:CreateTexture(nil, "ARTWORK")
+    divider.lineLeft = lineLeft
+
+    local lineRight = divider:CreateTexture(nil, "ARTWORK")
+    divider.lineRight = lineRight
+
+    -- Pre-allocate reusable backdrop tables (zero allocation on subsequent calls)
+    divider.nomtoolsBackdrop = { bgFile = nil }
+    divider.nomtoolsBackdropInsets = { left = 0, right = 0, top = 0, bottom = 0 }
+
+    pool[index] = divider
+    return divider
+end
+
+---@param divider table
+local function ApplyZoneDividerSettings(divider)
+    local zdSettings = GetZoneDividerSettings()
+
+    -- Height
+    divider:SetHeight(zdSettings.height or 20)
+
+    -- Background
+    if divider.SetBackdrop then
+        if zdSettings.showBackground == true then
+            local bgTextureKey = zdSettings.backgroundTexture
+            local bgTexture = ns.GetStatusBarTexturePath and ns.GetStatusBarTexturePath(bgTextureKey) or "Interface\\Buttons\\WHITE8x8"
+            local borderTextureKey = zdSettings.borderTexture
+            local borderSize = zdSettings.borderSize or 1
+
+            local backdrop = divider.nomtoolsBackdrop
+            backdrop.bgFile = bgTexture
+            backdrop.edgeFile = nil
+            backdrop.edgeSize = nil
+            backdrop.insets = nil
+
+            if borderTextureKey and borderTextureKey ~= "none" then
+                local borderPath = ns.GetBorderTexturePath and ns.GetBorderTexturePath(borderTextureKey) or borderTextureKey
+                backdrop.edgeFile = borderPath
+                backdrop.edgeSize = math.max(borderSize, 1)
+                local insets = divider.nomtoolsBackdropInsets
+                insets.left = borderSize
+                insets.right = borderSize
+                insets.top = borderSize
+                insets.bottom = borderSize
+                backdrop.insets = insets
+            end
+            divider:SetBackdrop(nil)
+            divider:SetBackdrop(backdrop)
+
+            local bgColor = zdSettings.backgroundColor or K.DEFAULT_ZONE_DIVIDER_BG_COLOR
+            divider:SetBackdropColor(bgColor.r or 0.05, bgColor.g or 0.05, bgColor.b or 0.05, bgColor.a or 0.6)
+
+            if backdrop.edgeFile then
+                local borderColor = zdSettings.borderColor or K.DEFAULT_ZONE_DIVIDER_BORDER_COLOR
+                divider:SetBackdropBorderColor(borderColor.r or 0.3, borderColor.g or 0.3, borderColor.b or 0.3, borderColor.a or 1)
+            end
+        else
+            divider:SetBackdrop(nil)
+        end
+    end
+
+    -- Label font
+    local label = divider.label
+    if label then
+        local fontPath = ns.GetFontPath and ns.GetFontPath(zdSettings.font) or STANDARD_TEXT_FONT
+        local fontSize = zdSettings.fontSize or 12
+        local fontOutline = ns.GetFontOutlineFlags and ns.GetFontOutlineFlags(zdSettings.fontOutline) or ""
+
+        if fontPath then
+            label:SetFont(fontPath, fontSize, fontOutline)
+        else
+            local existingFont, _, existingFlags = label:GetFont()
+            if existingFont then
+                label:SetFont(existingFont, fontSize, fontOutline ~= "" and fontOutline or existingFlags or "")
+            end
+        end
+
+        local textColor = zdSettings.textColor or K.DEFAULT_ZONE_DIVIDER_TEXT_COLOR
+        label:SetTextColor(textColor.r or 0.8, textColor.g or 0.72, textColor.b or 0.42, textColor.a or 1)
+    end
+
+    -- Line styling
+    local lineColor = zdSettings.lineColor or K.DEFAULT_ZONE_DIVIDER_LINE_COLOR
+    local lineThickness = zdSettings.lineThickness or 1
+
+    if divider.lineLeft then
+        divider.lineLeft:SetHeight(lineThickness)
+        divider.lineLeft:SetColorTexture(lineColor.r or 0.8, lineColor.g or 0.72, lineColor.b or 0.42, lineColor.a or 0.5)
+    end
+    if divider.lineRight then
+        divider.lineRight:SetHeight(lineThickness)
+        divider.lineRight:SetColorTexture(lineColor.r or 0.8, lineColor.g or 0.72, lineColor.b or 0.42, lineColor.a or 0.5)
+    end
+end
+
+local function ApplyDividerStyle(divider, align, showLines, fade)
+    local label = divider.label
+    local ll = divider.lineLeft
+    local lr = divider.lineRight
+    local pad = 4
+    local gap = 8
+
+    label:ClearAllPoints()
+    ll:ClearAllPoints()
+    lr:ClearAllPoints()
+
+    if align == "left" then
+        label:SetPoint("LEFT", divider, "LEFT", pad, 0)
+        ll:Hide()
+        if showLines then
+            lr:SetPoint("LEFT", label, "RIGHT", gap, 0)
+            lr:SetPoint("RIGHT", divider, "RIGHT", -pad, 0)
+            lr:Show()
+            if fade then
+                lr:SetGradient("HORIZONTAL", K.GRADIENT_SOLID, K.GRADIENT_TRANSPARENT)
+            else
+                lr:SetGradient("HORIZONTAL", K.GRADIENT_SOLID, K.GRADIENT_SOLID)
+            end
+        else
+            lr:Hide()
+        end
+    elseif align == "right" then
+        label:SetPoint("RIGHT", divider, "RIGHT", -pad, 0)
+        lr:Hide()
+        if showLines then
+            ll:SetPoint("LEFT", divider, "LEFT", pad, 0)
+            ll:SetPoint("RIGHT", label, "LEFT", -gap, 0)
+            ll:Show()
+            if fade then
+                ll:SetGradient("HORIZONTAL", K.GRADIENT_TRANSPARENT, K.GRADIENT_SOLID)
+            else
+                ll:SetGradient("HORIZONTAL", K.GRADIENT_SOLID, K.GRADIENT_SOLID)
+            end
+        else
+            ll:Hide()
+        end
+    else -- "center"
+        label:SetPoint("CENTER", divider, "CENTER", 0, 0)
+        if showLines then
+            ll:SetPoint("LEFT", divider, "LEFT", pad, 0)
+            ll:SetPoint("RIGHT", label, "LEFT", -gap, 0)
+            ll:Show()
+            lr:SetPoint("LEFT", label, "RIGHT", gap, 0)
+            lr:SetPoint("RIGHT", divider, "RIGHT", -pad, 0)
+            lr:Show()
+            if fade then
+                ll:SetGradient("HORIZONTAL", K.GRADIENT_TRANSPARENT, K.GRADIENT_SOLID)
+                lr:SetGradient("HORIZONTAL", K.GRADIENT_SOLID, K.GRADIENT_TRANSPARENT)
+            else
+                ll:SetGradient("HORIZONTAL", K.GRADIENT_SOLID, K.GRADIENT_SOLID)
+                lr:SetGradient("HORIZONTAL", K.GRADIENT_SOLID, K.GRADIENT_SOLID)
+            end
+        else
+            ll:Hide()
+            lr:Hide()
+        end
+    end
+end
+
+local function ApplySearchBarSettings(searchFrame)
+    if not searchFrame then return end
+    local settings = GetSearchBarSettings()
+    local trackerSettings = GetSettings()
+    local useCustom = trackerSettings and trackerSettings.appearance and trackerSettings.appearance.preset == "nomtools"
+
+    -- Height
+    searchFrame:SetHeight(settings.height or 16)
+
+    local editBox = searchFrame.editBox or state.searchEditBox
+    local placeholder = searchFrame.placeholder or (editBox and editBox.placeholder)
+    local bg = searchFrame.bg
+    local borderFrame = searchFrame.borderFrame
+
+    if not useCustom then
+        -- Native Blizzard look: show InputBoxTemplate chrome, hide custom bg/border
+        if editBox then
+            if editBox.Left   then editBox.Left:Show()   end
+            if editBox.Right  then editBox.Right:Show()  end
+            if editBox.Middle then editBox.Middle:Show() end
+            editBox:ClearAllPoints()
+            editBox:SetPoint("TOPLEFT",     searchFrame, "TOPLEFT",     12, 0)
+            editBox:SetPoint("BOTTOMRIGHT", searchFrame, "BOTTOMRIGHT", -5, 0)
+        end
+        if bg then bg:Hide() end
+        if borderFrame then borderFrame:Hide() end
+
+        -- Reset to standard Blizzard font/color
+        if editBox then
+            editBox:SetFontObject(GameFontHighlightSmall)
+            editBox:SetTextColor(1, 1, 1, 1)
+        end
+        if placeholder then
+            placeholder:SetTextColor(0.5, 0.5, 0.5, 1)
+        end
+    else
+        -- Custom preset: hide InputBoxTemplate chrome, use custom bg/border/font
+        if editBox then
+            if editBox.Left   then editBox.Left:Hide()   end
+            if editBox.Right  then editBox.Right:Hide()  end
+            if editBox.Middle then editBox.Middle:Hide() end
+            editBox:ClearAllPoints()
+            editBox:SetPoint("TOPLEFT",     searchFrame, "TOPLEFT",     8, 0)
+            editBox:SetPoint("BOTTOMRIGHT", searchFrame, "BOTTOMRIGHT", -8, 0)
+        end
+
+        -- Background texture
+        if bg then
+            if settings.showBackground ~= false then
+                local bgTextureKey = settings.backgroundTexture
+                if ns.GetStatusBarTexturePath then
+                    local texturePath = ns.GetStatusBarTexturePath(bgTextureKey)
+                    if texturePath then
+                        styleHelpers.ApplyTexturePath(bg, texturePath)
+                    else
+                        bg:SetColorTexture(0, 0, 0, 1)
+                    end
+                else
+                    bg:SetColorTexture(0, 0, 0, 1)
+                end
+                local bgColor = settings.backgroundColor or { r = 0, g = 0, b = 0, a = 0.1 }
+                styleHelpers.ApplyRegionColor(bg, bgColor)
+                bg:ClearAllPoints()
+                bg:SetPoint("TOPLEFT", searchFrame, "TOPLEFT", -K.TRACKER_VISUAL_LEFT_EXTENSION, 0)
+                bg:SetPoint("BOTTOMRIGHT", searchFrame, "BOTTOMRIGHT", 0, 0)
+                bg:Show()
+            else
+                bg:Hide()
+            end
+        end
+
+        -- Border via canonical helper
+        if borderFrame then
+            local borderColor = settings.borderColor or { r = 0.3, g = 0.3, b = 0.3, a = 1 }
+            local _, borderThickness = styleHelpers.ApplyBackdropBorder(
+                borderFrame,
+                searchFrame,
+                settings.borderSize,
+                settings.borderTexture,
+                borderColor,
+                -K.TRACKER_VISUAL_LEFT_EXTENSION, 0
+            )
+            if borderThickness == 0 then
+                borderFrame:Hide()
+            end
+        end
+
+        -- Font for edit box
+        if editBox and editBox.SetFont then
+            local fontPath = ns.GetFontPath and ns.GetFontPath(settings.font) or nil
+            local fontSize = settings.fontSize or 11
+            local fontOutline = ns.GetFontOutlineFlags and ns.GetFontOutlineFlags(settings.fontOutline) or ""
+            if fontPath then
+                editBox:SetFont(fontPath, fontSize, fontOutline)
+            end
+
+            local textColor = settings.textColor or { r = 1, g = 1, b = 1, a = 1 }
+            editBox:SetTextColor(textColor.r or 1, textColor.g or 1, textColor.b or 1, textColor.a or 1)
+        end
+
+        -- Placeholder font
+        if placeholder then
+            local fontPath = ns.GetFontPath and ns.GetFontPath(settings.font) or nil
+            local fontSize = settings.fontSize or 11
+            local fontOutline = ns.GetFontOutlineFlags and ns.GetFontOutlineFlags(settings.fontOutline) or ""
+            if fontPath then
+                placeholder:SetFont(fontPath, fontSize, fontOutline)
+            end
+
+            local phColor = settings.placeholderColor or { r = 0.5, g = 0.5, b = 0.5, a = 1 }
+            placeholder:SetTextColor(phColor.r or 0.5, phColor.g or 0.5, phColor.b or 0.5, phColor.a or 1)
+        end
+    end
+end
+
+local function HideAllZoneDividers(module)
+    local pool = module.nomtoolsZoneDividers
+    if not pool then
+        return
+    end
+    for i = 1, #pool do
+        pool[i]:Hide()
+    end
+end
+
+local compareSortBy, compareGroupByZone, compareQuestDescMul, compareZoneDescMul
+
+local function blockComparator(a, b)
+    local da = GetBlockSortData(a)
+    local db = GetBlockSortData(b)
+
+    if compareGroupByZone then
+        local za, zb = da.zoneName, db.zoneName
+        if za ~= zb then
+            if za < zb then return compareZoneDescMul == 1 end
+            return compareZoneDescMul ~= 1
+        end
+    end
+
+    if compareSortBy == "name" then
+        local ta, tb = da.title or "", db.title or ""
+        if ta ~= tb then
+            if ta < tb then return compareQuestDescMul == 1 end
+            return compareQuestDescMul ~= 1
+        end
+        return da.origIndex < db.origIndex
+    end
+
+    return da.origIndex < db.origIndex
+end
+
+---@param module table
+---@return boolean heightChanged  true if the module's height was updated
+ns.SortModuleBlocks = function(module)
+    if not module then
+        return false
+    end
+
+    local moduleKey = GetKeyForModule(module)
+    if not moduleKey or not SORTABLE_MODULE_KEYS[moduleKey] then
+        return false
+    end
+
+    local filterSettings = GetSettings().filter or {}
+    local sortBy = filterSettings.sortBy or "default"
+    local sortDirection = filterSettings.sortDirection or "asc"
+    local groupByZone = filterSettings.groupByZone == true
+
+    if sortBy == "default" and not groupByZone then
+        HideAllZoneDividers(module)
+        return false
+    end
+
+    -- Collect visible blocks
+    local scratch = sortScratch
+    local count = 0
+    if module.EnumerateActiveBlocks then
+        module:EnumerateActiveBlocks(function(block)
+            if block and (not block.IsShown or block:IsShown()) and block.GetHeight and block:GetHeight() > 0 then
+                count = count + 1
+                scratch[count] = block
+            end
+        end)
+    elseif type(module.usedBlocks) == "table" then
+        for _, blocksByID in pairs(module.usedBlocks) do
+            if type(blocksByID) == "table" then
+                for _, block in pairs(blocksByID) do
+                    if block and (not block.IsShown or block:IsShown()) and block.GetHeight and block:GetHeight() > 0 then
+                        count = count + 1
+                        scratch[count] = block
+                    end
+                end
+            end
+        end
+    end
+    -- Clean trailing entries from previous passes
+    for i = count + 1, #scratch do
+        scratch[i] = nil
+    end
+
+    if count <= 1 then
+        HideAllZoneDividers(module)
+        return false
+    end
+
+    -- Cache the original block spacing before any sorting modifies anchors
+    local blockSpacingY = module.nomtoolsBlockSpacingY
+    if not blockSpacingY then
+        -- Try to read from the second block's vertical anchor
+        local spacing = nil
+        if count >= 2 then
+            local secondBlock = scratch[2]
+            for i = 1, secondBlock:GetNumPoints() do
+                local point, _, relPoint, _, yOfs = secondBlock:GetPoint(i)
+                if point == "TOP" or point == "TOPLEFT" then
+                    spacing = yOfs
+                    break
+                end
+            end
+        end
+        blockSpacingY = spacing or -6
+        module.nomtoolsBlockSpacingY = blockSpacingY
+    end
+
+    -- Bump sort pass and extract sort data
+    sortPassID = sortPassID + 1
+    -- Record original index for stable sorting
+    for i = 1, count do
+        local data = GetBlockSortData(scratch[i])
+        data.origIndex = i
+    end
+
+    compareSortBy = sortBy
+    compareGroupByZone = groupByZone
+    compareQuestDescMul = (sortDirection == "desc") and -1 or 1
+    local zoneSortDir = filterSettings.zoneSortDirection or "asc"
+    compareZoneDescMul = (zoneSortDir == "desc") and -1 or 1
+
+    table.sort(scratch, blockComparator)
+
+    local contentsFrame = module.ContentsFrame or module
+    local absSpacing = math.abs(blockSpacingY)
+
+    -- Re-anchor blocks in sorted order, inserting zone dividers if needed
+    -- and compute the actual total content height
+    HideAllZoneDividers(module)
+    local zdSettings = GetZoneDividerSettings()
+    local dividerIndex = 0
+    local previousElement = nil
+    local totalHeight = 0
+
+    for i = 1, count do
+        local block = scratch[i]
+        local data = GetBlockSortData(block)
+        local blockHeight = block:GetHeight()
+
+        -- Insert zone divider between groups (or before the first block)
+        if groupByZone and data.zoneName ~= "" then
+            local needsDivider = false
+            if i == 1 then
+                needsDivider = true
+            else
+                local prevData = GetBlockSortData(scratch[i - 1])
+                needsDivider = data.zoneName ~= prevData.zoneName
+            end
+            if needsDivider then
+                dividerIndex = dividerIndex + 1
+                local divider = AcquireZoneDivider(module, dividerIndex)
+                divider.label:SetText(data.zoneName)
+                ApplyZoneDividerSettings(divider)
+                ApplyDividerStyle(divider, zdSettings.align or "center", zdSettings.showLines ~= false, zdSettings.lineFadeOut ~= false)
+                divider:ClearAllPoints()
+                if previousElement then
+                    divider:SetPoint("TOP", previousElement, "BOTTOM", 0, blockSpacingY)
+                    totalHeight = totalHeight + absSpacing
+                else
+                    divider:SetPoint("TOP", contentsFrame, "TOP", 0, 0)
+                end
+                -- Match section header width: extend left by scroll clip padding, right by module header extension
+                divider:SetPoint("LEFT", -K.TRACKER_VISUAL_LEFT_EXTENSION, 0)
+                divider:SetPoint("RIGHT", TRACKER_MODULE_HEADER_RIGHT_EXTENSION, 0)
+                totalHeight = totalHeight + divider:GetHeight()
+                previousElement = divider
+            end
+        end
+
+        block:ClearAllPoints()
+        -- Vertical positioning
+        if previousElement then
+            block:SetPoint("TOP", previousElement, "BOTTOM", 0, blockSpacingY)
+            totalHeight = totalHeight + absSpacing
+        else
+            block:SetPoint("TOP", contentsFrame, "TOP", 0, 0)
+        end
+        -- Horizontal positioning (matching Blizzard's pattern)
+        local leftOffset = block.offsetX or module.blockOffsetX or 20
+        block:SetPoint("LEFT", leftOffset, 0)
+        if not block.fixedWidth then
+            block:SetPoint("RIGHT")
+        end
+        totalHeight = totalHeight + blockHeight
+        previousElement = block
+    end
+
+    -- Update module height to reflect the re-anchored content
+    local oldHeight = module.GetHeight and module:GetHeight() or 0
+    local headerHeight = 0
+    if module.Header and module.Header.IsShown and module.Header:IsShown() and module.Header.GetHeight then
+        headerHeight = module.Header:GetHeight() or 0
+    else
+        headerHeight = module.headerHeight or 0
+    end
+
+    if contentsFrame ~= module and contentsFrame.SetHeight then
+        contentsFrame:SetHeight(totalHeight)
+    end
+    local newModuleHeight = totalHeight + headerHeight
+    if module.SetHeight then
+        module:SetHeight(newModuleHeight)
+    end
+
+    return math.abs(newModuleHeight - oldHeight) > 0.5
+end
+
+ns.RefreshZoneDividerAndSearchStyles = function()
+    local zdSettings = GetZoneDividerSettings()
+    for _, module in ipairs(GetOrderedContainerModules()) do
+        local pool = module.nomtoolsZoneDividers
+        if pool then
+            for i = 1, #pool do
+                local divider = pool[i]
+                if divider and divider:IsShown() then
+                    ApplyZoneDividerSettings(divider)
+                    ApplyDividerStyle(divider, zdSettings.align or "center", zdSettings.showLines ~= false, zdSettings.lineFadeOut ~= false)
+                end
+            end
+        end
+    end
+    ApplySearchBarSettings(state.searchFrame)
+end
+
+end -- do: SortModuleBlocks
 
 local function EnsureScrollBar()
     if state.scrollBar or not ObjectiveTrackerFrame then
@@ -3091,6 +4535,12 @@ local function EnsureScrollBar()
     thumb:SetSize(K.SCROLL_BAR_DEFAULT_WIDTH, K.SCROLL_BAR_MIN_THUMB_HEIGHT)
     scrollBar:SetThumbTexture(thumb)
     scrollBar.thumb = thumb
+
+    local borderFrame = CreateFrame("Frame", nil, scrollBar, BackdropTemplateMixin and "BackdropTemplate" or nil)
+    borderFrame:SetAllPoints(scrollBar)
+    borderFrame:SetFrameLevel((scrollBar:GetFrameLevel() or 0) + 1)
+    borderFrame:EnableMouse(false)
+    scrollBar.borderFrame = borderFrame
 
     scrollBar:SetScript("OnValueChanged", function(_, value)
         if state.updatingScrollBar then
@@ -3136,7 +4586,8 @@ local function RefreshTrackerHeader()
 
     local clipFrame = state.scrollClipFrame
     if clipFrame then
-        header:SetFrameLevel(math.max(header:GetFrameLevel(), clipFrame:GetFrameLevel() + 2))
+        local minHeaderLevel = clipFrame:GetFrameLevel() + 2
+        header:SetFrameLevel(math.max(header:GetFrameLevel(), minHeaderLevel))
     end
 
     -- Enforce the header-enabled setting; the hook on Header.Show handles re-shows from
@@ -3245,20 +4696,57 @@ local function RefreshScrollState()
         scrollBarB = fallbackColor.b
         scrollBarA = fallbackColor.a
     end
-    local topPadding = GetEffectiveTopPadding()
+    local contentH = state.lastContentHeight or 0
+    local frameH = (ObjectiveTrackerFrame.GetHeight and ObjectiveTrackerFrame:GetHeight()) or 0
+    local effectiveH = (contentH > 0) and math.min(contentH, frameH) or frameH
     scrollBar:ClearAllPoints()
-    scrollBar:SetPoint("TOPLEFT", ObjectiveTrackerFrame, "TOPRIGHT", 0, -topPadding)
-    scrollBar:SetPoint("BOTTOMLEFT", ObjectiveTrackerFrame, "BOTTOMRIGHT", 0, 2)
+    scrollBar:SetPoint("TOPLEFT", ObjectiveTrackerFrame, "TOPRIGHT", 0, 0)
+    scrollBar:SetHeight(effectiveH)
     scrollBar:SetWidth(scrollBarWidth)
 
     scrollBar.background:SetTexture(scrollBarTexture)
-    scrollBar.background:SetVertexColor(scrollBarR * 0.22, scrollBarG * 0.22, scrollBarB * 0.22, math.min(scrollBarA, 0.35))
+    local rawBgColor = scrollSettings.backgroundColor
+    if type(rawBgColor) == "table" then
+        local bgR = tonumber(rawBgColor.r or rawBgColor[1]) or (scrollBarR * 0.22)
+        local bgG = tonumber(rawBgColor.g or rawBgColor[2]) or (scrollBarG * 0.22)
+        local bgB = tonumber(rawBgColor.b or rawBgColor[3]) or (scrollBarB * 0.22)
+        local bgA = tonumber(rawBgColor.a or rawBgColor[4]) or math.min(scrollBarA, 0.35)
+        scrollBar.background:SetVertexColor(bgR, bgG, bgB, bgA)
+    else
+        scrollBar.background:SetVertexColor(scrollBarR * 0.22, scrollBarG * 0.22, scrollBarB * 0.22, math.min(scrollBarA, 0.35))
+    end
     scrollBar.thumb:SetTexture(scrollBarTexture)
     scrollBar.thumb:SetVertexColor(scrollBarR, scrollBarG, scrollBarB, scrollBarA)
 
     local ratio = visibleHeight / math.max(contentHeight, visibleHeight)
     local thumbHeight = math.max(K.SCROLL_BAR_MIN_THUMB_HEIGHT, math.floor((scrollBar:GetHeight() or visibleHeight) * ratio))
     scrollBar.thumb:SetSize(scrollBarWidth, thumbHeight)
+
+    -- Scrollbar border
+    if scrollBar.borderFrame then
+        local rawBorderColor = scrollSettings.borderColor
+        local fallbackBorderColor = K.DEFAULT_SCROLL_BAR_BORDER_COLOR
+        local borderColor
+        if type(rawBorderColor) == "table" then
+            borderColor = {
+                r = tonumber(rawBorderColor.r or rawBorderColor[1]) or fallbackBorderColor.r,
+                g = tonumber(rawBorderColor.g or rawBorderColor[2]) or fallbackBorderColor.g,
+                b = tonumber(rawBorderColor.b or rawBorderColor[3]) or fallbackBorderColor.b,
+                a = tonumber(rawBorderColor.a or rawBorderColor[4]) or fallbackBorderColor.a,
+            }
+        else
+            borderColor = fallbackBorderColor
+        end
+        local borderTexturePath = ns.GetBorderTexturePath and ns.GetBorderTexturePath(scrollSettings.borderTexture) or nil
+        styleHelpers.ApplyBackdropBorder(
+            scrollBar.borderFrame,
+            scrollBar,
+            scrollSettings.borderSize,
+            borderTexturePath,
+            borderColor,
+            0, 0
+        )
+    end
 
     state.updatingScrollBar = true
     scrollBar:SetMinMaxValues(0, maxOffset)
@@ -3300,18 +4788,30 @@ local function EnsureTrackerButton()
         return state.trackerButton
     end
 
-    local button = CreateFrame("Button", addonName .. "ObjectiveTrackerTrackAllButton", ObjectiveTrackerFrame.Header, "UIPanelButtonTemplate")
-    button:SetSize(K.TRACKER_BUTTON_WIDTH, K.TRACKER_BUTTON_HEIGHT)
-    button:SetText(TRACK_ALL_BUTTON_TEXT)
+    local button = CreateFrame("Button", addonName .. "ObjectiveTrackerTrackAllButton", ObjectiveTrackerFrame.Header)
+    button:SetSize(18, 19)
 
-    local anchor = ObjectiveTrackerFrame.Header.MinimizeButton or ObjectiveTrackerFrame.Header
-    if ObjectiveTrackerFrame.Header.MinimizeButton then
-        button:SetPoint("RIGHT", anchor, "LEFT", -4, 0)
-    else
-        button:SetPoint("RIGHT", anchor, "RIGHT", -4, 0)
-    end
+    local anchor = state.filterButton or ObjectiveTrackerFrame.Header.MinimizeButton or ObjectiveTrackerFrame.Header
+    button:SetPoint("RIGHT", anchor, "LEFT", -4, 0)
+
+    local trackIcon = button:CreateTexture(nil, "ARTWORK")
+    trackIcon:SetSize(18, 19)
+    trackIcon:SetPoint("CENTER")
+    trackIcon:SetAtlas("Waypoint-MapPin-Tracked", false)
+    button.icon = trackIcon
+
+    button:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+    button:GetHighlightTexture():SetAllPoints()
 
     button:SetScript("OnClick", TrackAllQuestLogQuests)
+    button:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText(TRACK_ALL_BUTTON_TEXT, 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    button:HookScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
     state.trackerButton = button
     return button
 end
@@ -3328,6 +4828,11 @@ local function RefreshTrackerButton()
         and ObjectiveTrackerFrame.Header
         and ObjectiveTrackerFrame.Header:IsShown()
     button:SetShown(shouldShow)
+
+    button:ClearAllPoints()
+    local anchor = state.filterButton or ObjectiveTrackerFrame.Header.MinimizeButton or ObjectiveTrackerFrame.Header
+    button:SetPoint("RIGHT", anchor, "LEFT", -4, 0)
+
     RefreshTrackerHeader()
 end
 
@@ -3416,10 +4921,27 @@ local function EnsureQuestLogButton()
         return state.questLogButton
     end
 
-    local button = CreateFrame("Button", addonName .. "QuestLogTrackAllButton", parent, "UIPanelButtonTemplate")
-    button:SetSize(K.QUEST_LOG_BUTTON_WIDTH, K.QUEST_LOG_BUTTON_HEIGHT)
-    button:SetText(TRACK_ALL_BUTTON_TEXT)
+    local button = CreateFrame("Button", addonName .. "QuestLogTrackAllButton", parent)
+    button:SetSize(18, 19)
+
+    local trackIcon = button:CreateTexture(nil, "ARTWORK")
+    trackIcon:SetSize(18, 19)
+    trackIcon:SetPoint("CENTER")
+    trackIcon:SetAtlas("Waypoint-MapPin-Tracked", false)
+    button.icon = trackIcon
+
+    button:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+    button:GetHighlightTexture():SetAllPoints()
+
     button:SetScript("OnClick", TrackAllQuestLogQuests)
+    button:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText(TRACK_ALL_BUTTON_TEXT, 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    button:HookScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
     LayoutQuestLogButton(button)
 
     state.questLogButton = button
@@ -3995,6 +5517,14 @@ local function GetTrackerStyleSignature()
     AppendColorSignature(parts, tbg.borderColor, K.DEFAULT_HEADER_BORDER_COLOR)
     parts[#parts + 1] = tostring(ns.GetBorderTexturePath and ns.GetBorderTexturePath(tbg.borderTexture or tbg.texture) or DEFAULT_STATUSBAR_TEXTURE_PATH)
 
+    local settings = GetSettings()
+    local filterSettings = settings.filter or {}
+    parts[#parts + 1] = tostring(filterSettings.sortBy or "default")
+    parts[#parts + 1] = tostring(filterSettings.sortDirection or "asc")
+    parts[#parts + 1] = tostring(filterSettings.groupByZone or false)
+    parts[#parts + 1] = tostring(settings.search and settings.search.enabled ~= false)
+    parts[#parts + 1] = tostring(settings.buttons and settings.buttons.filterButton ~= false)
+
     return table.concat(parts, "|")
 end
 
@@ -4167,12 +5697,12 @@ function styleHelpers.GetHeaderVisualExtensions(frame)
     end
 
     if frame == ObjectiveTrackerFrame.Header then
-        return TRACKER_SCROLL_CLIP_LEFT_PADDING, K.TRACKER_MAIN_HEADER_RIGHT_EXTENSION
+        return K.TRACKER_VISUAL_LEFT_EXTENSION, 0
     end
 
     local ownerModule = frame.GetParent and frame:GetParent() or nil
     if ownerModule and ownerModule.parentContainer == ObjectiveTrackerFrame then
-        return TRACKER_SCROLL_CLIP_LEFT_PADDING, TRACKER_MODULE_HEADER_RIGHT_EXTENSION
+        return K.TRACKER_VISUAL_LEFT_EXTENSION, TRACKER_MODULE_HEADER_RIGHT_EXTENSION
     end
 
     return 0, 0
@@ -4184,9 +5714,12 @@ function styleHelpers.ApplyHeaderVisualExtents(frame, region)
     end
 
     local leftExtension, rightExtension = styleHelpers.GetHeaderVisualExtensions(frame)
+    local ownerModule = frame:GetParent()
+    local anchorRef = (ownerModule and ownerModule.parentContainer == ObjectiveTrackerFrame) and ownerModule or frame
     region:ClearAllPoints()
-    region:SetPoint("TOPLEFT", frame, "TOPLEFT", -leftExtension, 0)
-    region:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", rightExtension, 0)
+    region:SetPoint("TOPLEFT", anchorRef, "TOPLEFT", -leftExtension, 0)
+    region:SetPoint("TOPRIGHT", anchorRef, "TOPRIGHT", rightExtension, 0)
+    region:SetHeight(frame:GetHeight())
 end
 
 function styleHelpers.ApplyHeaderButtonInset(frame)
@@ -4227,10 +5760,13 @@ function styleHelpers.ApplyHeaderChromeExtents(frame, chrome)
     end
 
     local leftExtension, rightExtension = styleHelpers.GetHeaderVisualExtensions(frame)
+    local ownerModule = frame:GetParent()
+    local anchorRef = (ownerModule and ownerModule.parentContainer == ObjectiveTrackerFrame) and ownerModule or frame
 
     chrome.background:ClearAllPoints()
-    chrome.background:SetPoint("TOPLEFT", frame, "TOPLEFT", -leftExtension, 0)
-    chrome.background:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", rightExtension, 0)
+    chrome.background:SetPoint("TOPLEFT", anchorRef, "TOPLEFT", -leftExtension, 0)
+    chrome.background:SetPoint("TOPRIGHT", anchorRef, "TOPRIGHT", rightExtension, 0)
+    chrome.background:SetHeight(frame:GetHeight())
 end
 
 function styleHelpers.EnsureFrameChrome(frame)
@@ -4329,8 +5865,8 @@ function styleHelpers.EnsureTrackerBackground()
     local bg = ObjectiveTrackerFrame:CreateTexture(nil, "BACKGROUND", nil, -8)
     bg:SetTexture("Interface\\Buttons\\WHITE8x8")
     bg:ClearAllPoints()
-    bg:SetPoint("TOPLEFT", ObjectiveTrackerFrame, "TOPLEFT", -TRACKER_SCROLL_CLIP_LEFT_PADDING, 0)
-    bg:SetPoint("BOTTOMRIGHT", ObjectiveTrackerFrame, "BOTTOMRIGHT", TRACKER_MODULE_HEADER_RIGHT_EXTENSION, 0)
+    bg:SetPoint("TOPLEFT", ObjectiveTrackerFrame, "TOPLEFT", -K.TRACKER_VISUAL_LEFT_EXTENSION, 0)
+    bg:SetPoint("BOTTOMRIGHT", ObjectiveTrackerFrame, "BOTTOMRIGHT", 0, 0)
     chrome.background = bg
 
     local borderHost = CreateFrame("Frame", nil, ObjectiveTrackerFrame)
@@ -4372,8 +5908,8 @@ function styleHelpers.ApplyTrackerBackground(tbgStyle)
     -- Re-anchor background to the effective height every time so it updates
     -- dynamically when content is added/removed or sections are collapsed.
     chrome.background:ClearAllPoints()
-    chrome.background:SetPoint("TOPLEFT",  ObjectiveTrackerFrame, "TOPLEFT",  -TRACKER_SCROLL_CLIP_LEFT_PADDING, 0)
-    chrome.background:SetPoint("TOPRIGHT", ObjectiveTrackerFrame, "TOPRIGHT",  TRACKER_MODULE_HEADER_RIGHT_EXTENSION, 0)
+    chrome.background:SetPoint("TOPLEFT",  ObjectiveTrackerFrame, "TOPLEFT",  -K.TRACKER_VISUAL_LEFT_EXTENSION, 0)
+    chrome.background:SetPoint("TOPRIGHT", ObjectiveTrackerFrame, "TOPRIGHT", 0, 0)
     chrome.background:SetHeight(effectiveH)
 
     styleHelpers.ApplyTexturePath(chrome.background, tbgStyle.texture)
@@ -4429,15 +5965,14 @@ function styleHelpers.ApplyHeaderChrome(frame, appearance)
     styleHelpers.ApplyHeaderChromeExtents(frame, chrome)
     styleHelpers.ApplyTexturePath(chrome.background, appearance.texture)
     styleHelpers.ApplyRegionColor(chrome.background, appearance.backgroundColor)
-    local leftExtension, rightExtension = styleHelpers.GetHeaderVisualExtensions(frame)
     local _, borderThickness = styleHelpers.ApplyBackdropBorder(
         chrome.borderFrame,
-        frame,
+        chrome.background,
         appearance.borderSize,
         appearance.borderTexture or appearance.texture,
         appearance.borderColor,
-        -leftExtension,
-        rightExtension
+        0,
+        0
     )
     chrome.background:Show()
 
@@ -4806,10 +6341,6 @@ function styleHelpers.IsLineCompleted(line, block)
         then
             return false
         end
-    end
-
-    if line.Text and styleHelpers.IsCompleteColorStyle(line.Text.colorStyle) then
-        return true
     end
 
     return false
@@ -5326,7 +6857,7 @@ function styleHelpers.GetQuestTitleColorOverride(questID, styles, isHighlighted)
     local color
     if IsPreyQuest(questID) then
         color = styles.preyTitleColor
-    elseif IsTrivialQuest(questID) and styles.useTrivialTitleColor then
+    elseif IsTrivialQuest(questID) and styles.useTrivialTitleColor and not IsCampaignQuest(questID) then
         color = styles.trivialTitleColor
     else
         local recurringType = GetRecurringQuestType(questID)
@@ -5614,6 +7145,10 @@ function styleHelpers.ApplyLineStyle(line, styles, block)
         return
     end
 
+    if line and line.Text then
+        line.Text.nomtoolsColorStyle = nil
+    end
+
     local isCompleted = styleHelpers.IsLineCompleted(line, block)
     local colorStyle = isCompleted and styles.completedStyle or styles.uncompletedStyle
     local color = (block and block.isHighlighted and colorStyle.reverse) or colorStyle
@@ -5642,7 +7177,7 @@ BuildBlockHeaderColorStyle = function(block, styles, module, questID)
     if isQuestModule and questID then
         if IsPreyQuest(questID) then
             headerStyle = styles.preyHeaderStyle or headerStyle
-        elseif IsTrivialQuest(questID) and styles.useTrivialTitleColor then
+        elseif IsTrivialQuest(questID) and styles.useTrivialTitleColor and not IsCampaignQuest(questID) then
             headerStyle = styles.trivialHeaderStyle or headerStyle
         else
             local recurringType = GetRecurringQuestType(questID)
@@ -5873,6 +7408,10 @@ end
 ApplyBlockStyle = function(block, styles, module)
     if not block or not styles then
         return
+    end
+
+    if block.HeaderText then
+        block.HeaderText.nomtoolsColorStyle = nil
     end
 
     styleHelpers.EnsureLiveBlockHooks(block)
@@ -6143,12 +7682,39 @@ local function RunTrackerPostLayout(container)
     RefreshScrollState()
 
     if not IsModuleEnabled() then
+        ns.RefreshFilterButton()
         RefreshTrackerButton()
         RefreshQuestLogButton()
         return
     end
 
     ApplyModuleAnchors()
+
+    if IsModuleEnabled() and not state.sortingInProgress then
+        state.sortingInProgress = true
+        local sortOk, sortErr = pcall(function()
+            local sortingApplied = false
+            for _, module in ipairs(GetOrderedContainerModules()) do
+                if module and not module.nomtoolsSearchFrame then
+                    if ns.SortModuleBlocks(module) then
+                        sortingApplied = true
+                    end
+                end
+            end
+            -- If sorting changed any module heights, re-anchor modules and
+            -- recalculate scroll content height to eliminate gaps.
+            if sortingApplied then
+                ApplyModuleAnchors()
+                RefreshScrollState()
+            end
+        end)
+        state.sortingInProgress = false
+        if not sortOk and ns.IsDebugEnabled and ns.IsDebugEnabled() then
+            ns.DebugPrint("Sort error: " .. tostring(sortErr))
+        end
+    end
+
+    ns.RefreshFilterButton()
     RefreshTrackerButton()
     RefreshQuestLogButton()
     RefreshTrackerHeader()
@@ -6158,6 +7724,12 @@ local function RunTrackerPostLayout(container)
         -- Blizzard's container can update for reasons other than fresh block
         -- content, and restyling the entire tracker on every one of those idle
         -- updates creates large transient allocation churn.
+
+        -- Re-apply zone divider and search bar settings when styles are dirty
+        if ns.RefreshZoneDividerAndSearchStyles then
+            ns.RefreshZoneDividerAndSearchStyles()
+        end
+
         RequestTrackerStyleRefresh(true)
     end
 end
@@ -6169,6 +7741,7 @@ RefreshObjectiveTrackerDisplay = function(immediateStyleRefresh)
 
     RefreshScrollClipFrame()
     RefreshScrollState()
+    ns.RefreshFilterButton()
     RefreshTrackerButton()
     RefreshQuestLogButton()
 
@@ -6177,6 +7750,11 @@ RefreshObjectiveTrackerDisplay = function(immediateStyleRefresh)
     end
 
     RefreshTrackerHeader()
+
+    if immediateStyleRefresh and ns.RefreshZoneDividerAndSearchStyles then
+        ns.RefreshZoneDividerAndSearchStyles()
+    end
+
     RequestTrackerStyleRefresh(false, immediateStyleRefresh == true)
 end
 
@@ -6206,7 +7784,7 @@ local function HandleTrackerFrameSizeChanged(self, width, height)
         return
     end
 
-    RefreshObjectiveTrackerDisplay()
+    RefreshObjectiveTrackerDisplay(true)
 end
 
 local function GetMinimapEffectiveWidth()
@@ -6297,10 +7875,10 @@ local function ApplyTrackerDimensions()
         local matchWidth = layout.matchMinimapWidth == true
         if matchWidth then
             if attachEdge == "top" then
-                ObjectiveTrackerFrame:SetPoint("BOTTOMLEFT",  Minimap, "TOPLEFT",  TRACKER_SCROLL_CLIP_LEFT_PADDING,       -yOff)
+                ObjectiveTrackerFrame:SetPoint("BOTTOMLEFT",  Minimap, "TOPLEFT",  K.TRACKER_VISUAL_LEFT_EXTENSION,       -yOff)
                 ObjectiveTrackerFrame:SetPoint("BOTTOMRIGHT", Minimap, "TOPRIGHT", -TRACKER_MODULE_HEADER_RIGHT_EXTENSION, -yOff)
             else
-                ObjectiveTrackerFrame:SetPoint("TOPLEFT",  Minimap, "BOTTOMLEFT",  TRACKER_SCROLL_CLIP_LEFT_PADDING,       yOff)
+                ObjectiveTrackerFrame:SetPoint("TOPLEFT",  Minimap, "BOTTOMLEFT",  K.TRACKER_VISUAL_LEFT_EXTENSION,       yOff)
                 ObjectiveTrackerFrame:SetPoint("TOPRIGHT", Minimap, "BOTTOMRIGHT", -TRACKER_MODULE_HEADER_RIGHT_EXTENSION, yOff)
             end
         else
@@ -6317,7 +7895,7 @@ local function ApplyTrackerDimensions()
         if layout.matchMinimapWidth and Minimap then
             local mmW = GetMinimapEffectiveWidth()
             if mmW then
-                w = math.floor(mmW - TRACKER_SCROLL_CLIP_LEFT_PADDING - TRACKER_MODULE_HEADER_RIGHT_EXTENSION + 0.5)
+                w = math.floor(mmW - K.TRACKER_VISUAL_LEFT_EXTENSION - TRACKER_MODULE_HEADER_RIGHT_EXTENSION + 0.5)
                 if w < 60 then w = nil end
             end
         end
@@ -6418,18 +7996,15 @@ local function InstallFrameHooks()
             return
         end
 
-        -- Debounce: skip if we already ran post-layout this frame.
-        -- In WoW, GetTime() returns the same value for all code within a
-        -- single rendered frame, so this naturally coalesces multiple
-        -- container Updates (e.g. from cross-addon cascade effects) into
-        -- a single NomTools processing pass per frame.
-        local now = GetTime()
-        if now == state.lastPostLayoutTime then
+        if state.inPostLayout then
             return
         end
-        state.lastPostLayoutTime = now
-
-        RunTrackerPostLayout(container)
+        state.inPostLayout = true
+        local ok, err = pcall(RunTrackerPostLayout, container)
+        state.inPostLayout = false
+        if not ok and ns.IsDebugEnabled and ns.IsDebugEnabled() then
+            ns.DebugPrint("PostLayout error: " .. tostring(err))
+        end
     end)
 
     -- Hook Header.Show so Blizzard re-shows can be immediately suppressed when the
@@ -6526,6 +8101,9 @@ local function RefreshObjectiveTrackerState(refreshMode)
 
     local focusedQuestModule = EnsureFocusedQuestModule()
     local zoneModule = EnsureZoneModule()
+    if IsModuleEnabled() and IsSearchEnabled() then
+        ns.EnsureSearchFrame()
+    end
 
     local function SetCustomModuleAttached(module, shouldAttach)
         if not module then
@@ -6582,6 +8160,16 @@ local function RefreshObjectiveTrackerState(refreshMode)
         SetCustomModuleAttached(zoneModule, false)
         RestoreOriginalModuleOrder()
         RestoreBlizzardModuleAnchors(true)
+        state.searchText = ""
+        if state.searchEditBox then
+            state.searchEditBox:SetText("")
+        end
+        if state.searchFrame then
+            state.searchFrame:Hide()
+        end
+        if state.filterDropFrame then state.filterDropFrame:Hide() end
+        if state.filterDropCloseListener then state.filterDropCloseListener:Hide() end
+        if state.filterButton then state.filterButton:Hide() end
     end
 
     if ObjectiveTrackerManager and ObjectiveTrackerManager.UpdateAll then

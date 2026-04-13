@@ -33,9 +33,9 @@ local SURFACE_BG_R = 0.10
 local SURFACE_BG_G = 0.11
 local SURFACE_BG_B = 0.13
 local SURFACE_BG_A = 0.96
-local SURFACE_BORDER_R = 0.28
-local SURFACE_BORDER_G = 0.30
-local SURFACE_BORDER_B = 0.34
+local SURFACE_BORDER_R = 0
+local SURFACE_BORDER_G = 0
+local SURFACE_BORDER_B = 0
 local SURFACE_BORDER_A = 1
 local SURFACE_HIGHLIGHT_A = 0.10
 local TEXT_VERTICAL_ANCHOR_CHOICES = {
@@ -980,8 +980,8 @@ local function NormalizeReminderAppearanceProfile(profile, defaults, includeNomT
             resolvedProfile.showAccent = resolvedProfile.showAccent ~= false
         end
         resolvedProfile.accentColor = NormalizeColorValue(resolvedProfile.accentColor, resolvedDefaults.accentColor or { r = 1, g = 0.82, b = 0, a = 1 })
-        resolvedProfile.backgroundColor = NormalizeColorValue(resolvedProfile.backgroundColor, resolvedDefaults.backgroundColor or { r = 0, g = 0, b = 0, a = 1 })
-        resolvedProfile.borderColor = NormalizeColorValue(resolvedProfile.borderColor, resolvedDefaults.borderColor or { r = 0.28, g = 0.30, b = 0.34, a = 1 })
+        resolvedProfile.backgroundColor = NormalizeColorValue(resolvedProfile.backgroundColor, resolvedDefaults.backgroundColor or { r = 0, g = 0, b = 0, a = 0.8 })
+        resolvedProfile.borderColor = NormalizeColorValue(resolvedProfile.borderColor, resolvedDefaults.borderColor or { r = 0, g = 0, b = 0, a = 1 })
         if type(resolvedProfile.borderTexture) ~= "string" or resolvedProfile.borderTexture == "" then
             resolvedProfile.borderTexture = resolvedDefaults.borderTexture or ns.GLOBAL_CHOICE_KEY
         end
@@ -5368,9 +5368,9 @@ function ns.InitializeOptions()
                             charStats.appearance.nomtools.fontOutline = nomDefaults.fontOutline or ns.GLOBAL_CHOICE_KEY
                             charStats.appearance.nomtools.fontSize = nomDefaults.fontSize or 12
                             charStats.appearance.nomtools.backgroundOpacity = nomDefaults.backgroundOpacity or 80
-                            local bgDef = nomDefaults.backgroundColor or { r = 0.05, g = 0.05, b = 0.05, a = 1 }
+                            local bgDef = nomDefaults.backgroundColor or { r = 0, g = 0, b = 0, a = 1 }
                             charStats.appearance.nomtools.backgroundColor = { r = bgDef.r, g = bgDef.g, b = bgDef.b, a = bgDef.a }
-                            local bdDef = nomDefaults.borderColor or { r = 0.25, g = 0.25, b = 0.25, a = 1 }
+                            local bdDef = nomDefaults.borderColor or { r = 0, g = 0, b = 0, a = 1 }
                             charStats.appearance.nomtools.borderColor = { r = bdDef.r, g = bdDef.g, b = bdDef.b, a = bdDef.a }
                             charStats.appearance.nomtools.borderSize = nomDefaults.borderSize or 1
                             charStats.appearance.nomtools.texture = nomDefaults.texture or ns.GLOBAL_CHOICE_KEY
@@ -5523,6 +5523,13 @@ function ns.InitializeOptions()
     )
     miscCharStatsPanel.refreshers[#miscCharStatsPanel.refreshers + 1] = presetDropdown
 
+    appearanceCard.presetHint = appearanceCard:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    appearanceCard.presetHint:SetPoint("TOPLEFT", presetDropdown, "BOTTOMLEFT", 0, -6)
+    appearanceCard.presetHint:SetWidth(APPEARANCE_COLUMN_WIDTH)
+    appearanceCard.presetHint:SetJustifyH("LEFT")
+    appearanceCard.presetHint:SetText("Change to |cFFFFD100Custom|r to unlock all appearance options.")
+    appearanceCard.presetHint:SetTextColor(ACCENT_SUBTLE_R, ACCENT_SUBTLE_G, ACCENT_SUBTLE_B)
+
     local fontDropdown = CreateFontDropdown(
         appearanceCard, 18, -156,
         "Font", APPEARANCE_COLUMN_WIDTH,
@@ -5588,11 +5595,11 @@ function ns.InitializeOptions()
         appearanceCard, APPEARANCE_RIGHT_COLUMN_X, -300,
         "Border Color",
         function()
-            return NormalizeColorValue(GetCharStatsNomToolsProfile().borderColor, { r = 0.25, g = 0.25, b = 0.25, a = 1 })
+            return NormalizeColorValue(GetCharStatsNomToolsProfile().borderColor, { r = 0, g = 0, b = 0, a = 1 })
         end,
         function(value)
             local profile = GetCharStatsNomToolsProfile()
-            local color = NormalizeColorValue(value, { r = 0.25, g = 0.25, b = 0.25, a = 1 })
+            local color = NormalizeColorValue(value, { r = 0, g = 0, b = 0, a = 1 })
             profile.borderColor = { r = color.r, g = color.g, b = color.b, a = color.a }
             RefreshCharStatsAppearance()
         end,
@@ -5727,6 +5734,7 @@ function ns.InitializeOptions()
         SetControlEnabled(bgColorButton, useNomToolsAppearance)
         SetControlEnabled(borderColorButton, useNomToolsAppearance)
         SetControlEnabled(borderSizeSlider, useNomToolsAppearance)
+        appearanceCard.presetHint:SetShown(not useNomToolsAppearance)
         currentY = currentY - FitSectionCardHeight(appearanceCard, 20) - cardSpacing
 
         positionCard:ClearAllPoints()
@@ -5847,6 +5855,8 @@ function ns.InitializeOptions()
         s.typography = CopyTableRecursive(objectiveTrackerDefaults.typography or {})
         s.scrollBar = CopyTableRecursive(objectiveTrackerDefaults.scrollBar or {})
         s.progressBar = CopyTableRecursive(objectiveTrackerDefaults.progressBar or {})
+        s.zoneDivider = CopyTableRecursive(objectiveTrackerDefaults.zoneDivider or {})
+        s.search = CopyTableRecursive(objectiveTrackerDefaults.search or {})
     end
     local function OTSectionsResetHandler()
         if not ns.db or not ns.db.objectiveTracker then return end
@@ -6054,6 +6064,20 @@ function ns.InitializeOptions()
         return GetSectionAppearanceOptions("button")
     end
 
+    local function GetZoneDividerOptions()
+        local settings = GetObjectiveTrackerOptions()
+        if not settings then return {} end
+        settings.zoneDivider = settings.zoneDivider or {}
+        return settings.zoneDivider
+    end
+
+    local function GetSearchBarOptions()
+        local settings = GetObjectiveTrackerOptions()
+        if not settings then return {} end
+        settings.search = settings.search or {}
+        return settings.search
+    end
+
     local function GetObjectiveTrackerTrackerBackgroundOptions()
         local appearance = GetObjectiveTrackerAppearanceOptions()
         local defaults = ns.DEFAULTS and ns.DEFAULTS.objectiveTracker and ns.DEFAULTS.objectiveTracker.appearance and ns.DEFAULTS.objectiveTracker.appearance.trackerBackground or {}
@@ -6162,6 +6186,15 @@ function ns.InitializeOptions()
         end
     end
 
+    local function RefreshZoneDividerAndSearchOptionsImmediate()
+        if ns.RefreshZoneDividerAndSearchStyles then
+            ns.RefreshZoneDividerAndSearchStyles()
+        end
+        if objectiveTrackerAppearancePanel and objectiveTrackerAppearancePanel.RefreshAll then
+            objectiveTrackerAppearancePanel:RefreshAll()
+        end
+    end
+
     local function RefreshObjectiveTrackerStructureOptionsPanel()
         RefreshObjectiveTrackerOptionsPanel("full")
     end
@@ -6217,6 +6250,29 @@ function ns.InitializeOptions()
     )
     objectiveTrackerPanel.refreshers[#objectiveTrackerPanel.refreshers + 1] = objectiveTrackerControls.questLogTrackAll
 
+    objectiveTrackerControls.groupByZone = CreateCheckbox(
+        objectiveTrackerCards.general,
+        "Group Quests by Zone",
+        18,
+        -142,
+        function()
+            local settings = GetObjectiveTrackerOptions()
+            if settings then
+                settings.filter = settings.filter or {}
+                return settings.filter.groupByZone == true
+            end
+        end,
+        function(value)
+            local settings = GetObjectiveTrackerOptions()
+            if settings then
+                settings.filter = settings.filter or {}
+                settings.filter.groupByZone = value and true or false
+            end
+            RefreshObjectiveTrackerStructureOptionsPanel()
+        end
+    )
+    objectiveTrackerPanel.refreshers[#objectiveTrackerPanel.refreshers + 1] = objectiveTrackerControls.groupByZone
+
     objectiveTrackerCards.position = CreateSectionCard(
         objectiveTrackerLayoutContent,
         sectionX,
@@ -6237,26 +6293,11 @@ function ns.InitializeOptions()
         "Attach the tracker to the minimap and optionally match its width."
     )
 
-    objectiveTrackerControls.generalMatchMinimapWidth = CreateCheckbox(
-        objectiveTrackerCards.minimap,
-        "Match Minimap Width",
-        18,
-        -82,
-        function()
-            return GetObjectiveTrackerLayoutOptions().matchMinimapWidth == true
-        end,
-        function(value)
-            GetObjectiveTrackerLayoutOptions().matchMinimapWidth = value and true or false
-            RefreshObjectiveTrackerStructureOptionsPanel()
-        end
-    )
-    objectiveTrackerLayoutPanel.refreshers[#objectiveTrackerLayoutPanel.refreshers + 1] = objectiveTrackerControls.generalMatchMinimapWidth
-
     objectiveTrackerControls.generalAttachToMinimap = CreateCheckbox(
         objectiveTrackerCards.minimap,
         "Attach to Minimap",
         18,
-        -112,
+        -82,
         function()
             return GetObjectiveTrackerLayoutOptions().attachToMinimap == true
         end,
@@ -6266,6 +6307,21 @@ function ns.InitializeOptions()
         end
     )
     objectiveTrackerLayoutPanel.refreshers[#objectiveTrackerLayoutPanel.refreshers + 1] = objectiveTrackerControls.generalAttachToMinimap
+
+    objectiveTrackerControls.generalMatchMinimapWidth = CreateCheckbox(
+        objectiveTrackerCards.minimap,
+        "Match Minimap Width",
+        18,
+        -112,
+        function()
+            return GetObjectiveTrackerLayoutOptions().matchMinimapWidth == true
+        end,
+        function(value)
+            GetObjectiveTrackerLayoutOptions().matchMinimapWidth = value and true or false
+            RefreshObjectiveTrackerStructureOptionsPanel()
+        end
+    )
+    objectiveTrackerLayoutPanel.refreshers[#objectiveTrackerLayoutPanel.refreshers + 1] = objectiveTrackerControls.generalMatchMinimapWidth
 
     objectiveTrackerControls.generalMinimapAttachEdgeDropdown = CreateStaticDropdown(
         objectiveTrackerCards.minimap,
@@ -6448,6 +6504,13 @@ function ns.InitializeOptions()
             "Default"
     )
     objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.appearancePresetDropdown
+
+    objectiveTrackerControls.appearancePresetHint = objectiveTrackerCards.preset:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    objectiveTrackerControls.appearancePresetHint:SetPoint("TOPLEFT", objectiveTrackerControls.appearancePresetDropdown, "BOTTOMLEFT", 0, -6)
+    objectiveTrackerControls.appearancePresetHint:SetWidth(FULL_DROPDOWN_WIDTH)
+    objectiveTrackerControls.appearancePresetHint:SetJustifyH("LEFT")
+    objectiveTrackerControls.appearancePresetHint:SetText("Change to |cFFFFD100Custom|r to unlock all appearance options.")
+    objectiveTrackerControls.appearancePresetHint:SetTextColor(ACCENT_SUBTLE_R, ACCENT_SUBTLE_G, ACCENT_SUBTLE_B)
 
     -- Tracker Background sub-section
     objectiveTrackerControls.trackerBgLabel = CreateSubsectionTitle(objectiveTrackerCards.appearance, "Tracker Background", 18, -130)
@@ -7205,7 +7268,7 @@ function ns.InitializeOptions()
         sectionX,
         -96,
         sectionWidth,
-        262,
+        310,
         "Scrollbar",
         "Disable scrolling entirely, keep the scrollbar visible, or hide the art while still retaining mouse-wheel scrolling."
     )
@@ -7228,8 +7291,8 @@ function ns.InitializeOptions()
     objectiveTrackerControls.scrollVisible = CreateCheckbox(
         objectiveTrackerCards.scrollBar,
         "Show Scrollbar",
-        18,
-        -112,
+        APPEARANCE_RIGHT_COLUMN_X,
+        -82,
         function()
             return GetObjectiveTrackerScrollBarOptions().visible ~= false
         end,
@@ -7243,7 +7306,7 @@ function ns.InitializeOptions()
     objectiveTrackerControls.scrollTextureDropdown = CreateStatusBarTextureDropdown(
         objectiveTrackerCards.scrollBar,
         18,
-        -154,
+        -156,
         "Scrollbar Texture",
         APPEARANCE_COLUMN_WIDTH,
         function()
@@ -7251,7 +7314,7 @@ function ns.InitializeOptions()
         end,
         function(value)
             GetObjectiveTrackerScrollBarOptions().texture = value
-            RefreshObjectiveTrackerOptionsPanel()
+            ScheduleObjectiveTrackerAppearanceSoftRefresh()
         end,
             "Default Status Bar"
     )
@@ -7259,27 +7322,104 @@ function ns.InitializeOptions()
 
     objectiveTrackerControls.scrollColorButton = CreateColorButton(
         objectiveTrackerCards.scrollBar,
-        338,
-        -154,
+        APPEARANCE_RIGHT_COLUMN_X,
+        -156,
         "Scrollbar Color",
         function()
             return GetObjectiveTrackerScrollBarOptions().color
         end,
         function(value)
             GetObjectiveTrackerScrollBarOptions().color = value
-            RefreshObjectiveTrackerOptionsPanel()
+            ScheduleObjectiveTrackerAppearanceSoftRefresh()
         end,
         { width = APPEARANCE_COLUMN_WIDTH }
     )
     objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.scrollColorButton
 
+    objectiveTrackerControls.scrollBgColorButton = CreateColorButton(
+        objectiveTrackerCards.scrollBar,
+        18,
+        -230,
+        "Background Color",
+        function()
+            return GetObjectiveTrackerScrollBarOptions().backgroundColor
+        end,
+        function(value)
+            GetObjectiveTrackerScrollBarOptions().backgroundColor = value
+            ScheduleObjectiveTrackerAppearanceSoftRefresh()
+        end,
+        { width = APPEARANCE_COLUMN_WIDTH }
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.scrollBgColorButton
+
+    objectiveTrackerControls.scrollBorderColorButton = CreateColorButton(
+        objectiveTrackerCards.scrollBar,
+        APPEARANCE_RIGHT_COLUMN_X,
+        -230,
+        "Border Color",
+        function()
+            return GetObjectiveTrackerScrollBarOptions().borderColor
+        end,
+        function(value)
+            GetObjectiveTrackerScrollBarOptions().borderColor = value
+            ScheduleObjectiveTrackerAppearanceSoftRefresh()
+        end,
+        { width = APPEARANCE_COLUMN_WIDTH }
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.scrollBorderColorButton
+
+    objectiveTrackerControls.scrollBorderTextureDropdown = CreateStatusBarTextureDropdown(
+        objectiveTrackerCards.scrollBar,
+        18,
+        -304,
+        "Border Texture",
+        APPEARANCE_COLUMN_WIDTH,
+        function()
+            return GetObjectiveTrackerScrollBarOptions().borderTexture
+        end,
+        function(value)
+            GetObjectiveTrackerScrollBarOptions().borderTexture = value
+            ScheduleObjectiveTrackerAppearanceSoftRefresh()
+        end,
+        "Global",
+        {
+            choiceProvider = ns.GetBorderTextureChoices,
+            labelProvider = ns.GetBorderTextureLabel,
+            previewMode = "border",
+            texturePathResolver = ns.GetBorderTexturePath,
+        }
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.scrollBorderTextureDropdown
+
+    objectiveTrackerControls.scrollBorderSizeSlider = CreateSlider(
+        objectiveTrackerCards.scrollBar,
+        APPEARANCE_RIGHT_COLUMN_X,
+        -304,
+        "Border Size",
+        APPEARANCE_COLUMN_WIDTH,
+        -10,
+        10,
+        1,
+        function()
+            return GetObjectiveTrackerScrollBarOptions().borderSize or 1
+        end,
+        function(value)
+            GetObjectiveTrackerScrollBarOptions().borderSize = value
+            ScheduleObjectiveTrackerAppearanceSoftRefresh()
+        end,
+        function(value)
+            return FormatSliderValue(value, 0, " px")
+        end
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.scrollBorderSizeSlider
+
     objectiveTrackerControls.scrollWidthSlider = CreateSlider(
         objectiveTrackerCards.scrollBar,
         18,
-        -228,
+        -378,
         "Scrollbar Width",
         APPEARANCE_COLUMN_WIDTH,
-        4,
+        1,
         24,
         1,
         function()
@@ -7287,7 +7427,7 @@ function ns.InitializeOptions()
         end,
         function(value)
             GetObjectiveTrackerScrollBarOptions().width = value
-            RefreshObjectiveTrackerOptionsPanel()
+            ScheduleObjectiveTrackerAppearanceSoftRefresh()
         end,
         function(value)
             return FormatSliderValue(value, 0, " px")
@@ -7611,6 +7751,277 @@ function ns.InitializeOptions()
         objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = progressBarPreviewRefresher
     end
 
+    objectiveTrackerCards.zoneHeaders = CreateSectionCard(
+        objectiveTrackerAppearanceContent,
+        sectionX,
+        -96,
+        sectionWidth,
+        600,
+        "Zone Headers",
+        "Customize the appearance of zone divider headers when grouping quests by zone."
+    )
+
+    objectiveTrackerControls.zoneHeaderAlignLabel = CreateSubsectionTitle(objectiveTrackerCards.zoneHeaders, "Alignment", 18, -10)
+
+    objectiveTrackerControls.zoneHeaderAlignDropdown = CreateStaticDropdown(
+        objectiveTrackerCards.zoneHeaders, 18, -48, "Text Alignment", APPEARANCE_COLUMN_WIDTH,
+        function()
+            return {
+                { key = "left", name = "Left" },
+                { key = "center", name = "Center" },
+                { key = "right", name = "Right" },
+            }
+        end,
+        function() return GetZoneDividerOptions().align or "center" end,
+        function(value) GetZoneDividerOptions().align = value; RefreshZoneDividerAndSearchOptionsImmediate() end,
+        "Center"
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.zoneHeaderAlignDropdown
+
+    objectiveTrackerControls.zoneHeaderSepLabel = CreateSubsectionTitle(objectiveTrackerCards.zoneHeaders, "Separator Lines", 18, -120)
+
+    objectiveTrackerControls.zoneHeaderShowLinesCheckbox = CreateCheckbox(
+        objectiveTrackerCards.zoneHeaders, "Show Separator Lines", 18, -158,
+        function() return GetZoneDividerOptions().showLines ~= false end,
+        function(value) GetZoneDividerOptions().showLines = value and true or false; RefreshZoneDividerAndSearchOptionsImmediate() end
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.zoneHeaderShowLinesCheckbox
+
+    objectiveTrackerControls.zoneHeaderLineFadeCheckbox = CreateCheckbox(
+        objectiveTrackerCards.zoneHeaders, "Fade Lines at Edges", APPEARANCE_RIGHT_COLUMN_X, -158,
+        function() return GetZoneDividerOptions().lineFadeOut ~= false end,
+        function(value) GetZoneDividerOptions().lineFadeOut = value and true or false; RefreshZoneDividerAndSearchOptionsImmediate() end
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.zoneHeaderLineFadeCheckbox
+
+    objectiveTrackerControls.zoneHeaderLineColorButton = CreateColorButton(
+        objectiveTrackerCards.zoneHeaders, 18, -196, "Line Color",
+        function() return GetZoneDividerOptions().lineColor or { r = 0.8, g = 0.72, b = 0.42, a = 0.5 } end,
+        function(value) GetZoneDividerOptions().lineColor = value; RefreshZoneDividerAndSearchOptionsImmediate() end,
+        { width = APPEARANCE_COLUMN_WIDTH }
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.zoneHeaderLineColorButton
+
+    objectiveTrackerControls.zoneHeaderLineThicknessSlider = CreateSlider(
+        objectiveTrackerCards.zoneHeaders, APPEARANCE_RIGHT_COLUMN_X, -196, "Line Thickness", APPEARANCE_COLUMN_WIDTH, 1, 5, 1,
+        function() return GetZoneDividerOptions().lineThickness or 1 end,
+        function(value) GetZoneDividerOptions().lineThickness = value; RefreshZoneDividerAndSearchOptionsImmediate() end,
+        function(value) return FormatSliderValue(value, 0, " px") end
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.zoneHeaderLineThicknessSlider
+
+    objectiveTrackerControls.zoneHeaderTypoLabel = CreateSubsectionTitle(objectiveTrackerCards.zoneHeaders, "Typography", 18, -268)
+
+    objectiveTrackerControls.zoneHeaderFontDropdown = CreateFontDropdown(
+        objectiveTrackerCards.zoneHeaders, 18, -306, "Font", APPEARANCE_COLUMN_WIDTH,
+        function() return GetZoneDividerOptions().font or ns.GLOBAL_CHOICE_KEY end,
+        function(value) GetZoneDividerOptions().font = value; RefreshZoneDividerAndSearchOptionsImmediate() end
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.zoneHeaderFontDropdown
+
+    objectiveTrackerControls.zoneHeaderFontOutlineDropdown = CreateStaticDropdown(
+        objectiveTrackerCards.zoneHeaders, APPEARANCE_RIGHT_COLUMN_X, -306, "Font Outline", APPEARANCE_COLUMN_WIDTH,
+        function() return ns.GetFontOutlineChoices and ns.GetFontOutlineChoices(true) or {} end,
+        function() return GetZoneDividerOptions().fontOutline or ns.GLOBAL_CHOICE_KEY end,
+        function(value) GetZoneDividerOptions().fontOutline = value; RefreshZoneDividerAndSearchOptionsImmediate() end,
+        "Outline"
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.zoneHeaderFontOutlineDropdown
+
+    objectiveTrackerControls.zoneHeaderFontSizeSlider = CreateSlider(
+        objectiveTrackerCards.zoneHeaders, 18, -380, "Font Size", APPEARANCE_COLUMN_WIDTH, 6, 28, 1,
+        function() return GetZoneDividerOptions().fontSize or 12 end,
+        function(value) GetZoneDividerOptions().fontSize = value; RefreshZoneDividerAndSearchOptionsImmediate() end,
+        function(value) return FormatSliderValue(value, 0, " px") end
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.zoneHeaderFontSizeSlider
+
+    objectiveTrackerControls.zoneHeaderTextColorButton = CreateColorButton(
+        objectiveTrackerCards.zoneHeaders, APPEARANCE_RIGHT_COLUMN_X, -380, "Text Color",
+        function() return GetZoneDividerOptions().textColor or { r = 0.8, g = 0.72, b = 0.42, a = 1 } end,
+        function(value) GetZoneDividerOptions().textColor = value; RefreshZoneDividerAndSearchOptionsImmediate() end,
+        { hasOpacity = false, width = APPEARANCE_COLUMN_WIDTH }
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.zoneHeaderTextColorButton
+
+    objectiveTrackerControls.zoneHeaderBgLabel = CreateSubsectionTitle(objectiveTrackerCards.zoneHeaders, "Background", 18, -452)
+
+    objectiveTrackerControls.zoneHeaderShowBgCheckbox = CreateCheckbox(
+        objectiveTrackerCards.zoneHeaders, "Show Background", 18, -490,
+        function() return GetZoneDividerOptions().showBackground == true end,
+        function(value) GetZoneDividerOptions().showBackground = value and true or false; RefreshZoneDividerAndSearchOptionsImmediate() end
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.zoneHeaderShowBgCheckbox
+
+    objectiveTrackerControls.zoneHeaderBgTextureDropdown = CreateStatusBarTextureDropdown(
+        objectiveTrackerCards.zoneHeaders, 18, -528, "Background Texture", APPEARANCE_COLUMN_WIDTH,
+        function() return GetZoneDividerOptions().backgroundTexture or ns.GLOBAL_CHOICE_KEY end,
+        function(value) GetZoneDividerOptions().backgroundTexture = value; RefreshZoneDividerAndSearchOptionsImmediate() end,
+        "Default Status Bar"
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.zoneHeaderBgTextureDropdown
+
+    objectiveTrackerControls.zoneHeaderBgColorButton = CreateColorButton(
+        objectiveTrackerCards.zoneHeaders, APPEARANCE_RIGHT_COLUMN_X, -528, "Background Color",
+        function() return GetZoneDividerOptions().backgroundColor or { r = 0, g = 0, b = 0, a = 0.8 } end,
+        function(value) GetZoneDividerOptions().backgroundColor = value; RefreshZoneDividerAndSearchOptionsImmediate() end,
+        { width = APPEARANCE_COLUMN_WIDTH }
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.zoneHeaderBgColorButton
+
+    objectiveTrackerControls.zoneHeaderBorderTextureDropdown = CreateStatusBarTextureDropdown(
+        objectiveTrackerCards.zoneHeaders, 18, -602, "Border Texture", APPEARANCE_COLUMN_WIDTH,
+        function() return GetZoneDividerOptions().borderTexture or ns.GLOBAL_CHOICE_KEY end,
+        function(value) GetZoneDividerOptions().borderTexture = value; RefreshZoneDividerAndSearchOptionsImmediate() end,
+        "Default",
+        {
+            choiceProvider = ns.GetBorderTextureChoices,
+            labelProvider = ns.GetBorderTextureLabel,
+            previewMode = "border",
+            texturePathResolver = ns.GetBorderTexturePath,
+        }
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.zoneHeaderBorderTextureDropdown
+
+    objectiveTrackerControls.zoneHeaderBorderSizeSlider = CreateSlider(
+        objectiveTrackerCards.zoneHeaders, APPEARANCE_RIGHT_COLUMN_X, -602, "Border Size", APPEARANCE_COLUMN_WIDTH, -10, 10, 1,
+        function() return GetZoneDividerOptions().borderSize or 1 end,
+        function(value) GetZoneDividerOptions().borderSize = value; ScheduleObjectiveTrackerAppearanceSoftRefresh() end,
+        function(value) return FormatSliderValue(value, 0, " px") end
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.zoneHeaderBorderSizeSlider
+
+    objectiveTrackerControls.zoneHeaderBorderColorButton = CreateColorButton(
+        objectiveTrackerCards.zoneHeaders, 18, -676, "Border Color",
+        function() return GetZoneDividerOptions().borderColor or { r = 0.3, g = 0.3, b = 0.3, a = 1 } end,
+        function(value) GetZoneDividerOptions().borderColor = value; RefreshZoneDividerAndSearchOptionsImmediate() end,
+        { hasOpacity = false, width = APPEARANCE_COLUMN_WIDTH }
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.zoneHeaderBorderColorButton
+
+    objectiveTrackerControls.zoneHeaderHeightLabel = CreateSubsectionTitle(objectiveTrackerCards.zoneHeaders, "Size", 18, -748)
+
+    objectiveTrackerControls.zoneHeaderHeightSlider = CreateSlider(
+        objectiveTrackerCards.zoneHeaders, 18, -786, "Height", APPEARANCE_COLUMN_WIDTH, 12, 40, 1,
+        function() return GetZoneDividerOptions().height or 20 end,
+        function(value) GetZoneDividerOptions().height = value; ScheduleObjectiveTrackerAppearanceSoftRefresh() end,
+        function(value) return FormatSliderValue(value, 0, " px") end
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.zoneHeaderHeightSlider
+
+    objectiveTrackerCards.searchBar = CreateSectionCard(
+        objectiveTrackerAppearanceContent,
+        sectionX,
+        -96,
+        sectionWidth,
+        640,
+        "Search Bar",
+        "Customize the appearance of the quest search bar."
+    )
+
+    objectiveTrackerControls.searchBarShowBgCheckbox = CreateCheckbox(
+        objectiveTrackerCards.searchBar, "Show Background", 18, -82,
+        function() return GetSearchBarOptions().showBackground ~= false end,
+        function(value) GetSearchBarOptions().showBackground = value and true or false; RefreshZoneDividerAndSearchOptionsImmediate() end
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.searchBarShowBgCheckbox
+
+    objectiveTrackerControls.searchBarBgColorButton = CreateColorButton(
+        objectiveTrackerCards.searchBar, APPEARANCE_RIGHT_COLUMN_X, -82, "Background Color",
+        function() return GetSearchBarOptions().backgroundColor or { r = 0, g = 0, b = 0, a = 0.8 } end,
+        function(value) GetSearchBarOptions().backgroundColor = value; RefreshZoneDividerAndSearchOptionsImmediate() end,
+        { width = APPEARANCE_COLUMN_WIDTH }
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.searchBarBgColorButton
+
+    objectiveTrackerControls.searchBarFontDropdown = CreateFontDropdown(
+        objectiveTrackerCards.searchBar, 18, -156, "Font", APPEARANCE_COLUMN_WIDTH,
+        function() return GetSearchBarOptions().font or ns.GLOBAL_CHOICE_KEY end,
+        function(value) GetSearchBarOptions().font = value; RefreshZoneDividerAndSearchOptionsImmediate() end
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.searchBarFontDropdown
+
+    objectiveTrackerControls.searchBarFontOutlineDropdown = CreateStaticDropdown(
+        objectiveTrackerCards.searchBar, APPEARANCE_RIGHT_COLUMN_X, -156, "Font Outline", APPEARANCE_COLUMN_WIDTH,
+        function() return ns.GetFontOutlineChoices and ns.GetFontOutlineChoices(true) or {} end,
+        function() return GetSearchBarOptions().fontOutline or ns.GLOBAL_CHOICE_KEY end,
+        function(value) GetSearchBarOptions().fontOutline = value; RefreshZoneDividerAndSearchOptionsImmediate() end,
+        "Outline"
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.searchBarFontOutlineDropdown
+
+    objectiveTrackerControls.searchBarFontSizeSlider = CreateSlider(
+        objectiveTrackerCards.searchBar, 18, -230, "Font Size", APPEARANCE_COLUMN_WIDTH, 6, 28, 1,
+        function() return GetSearchBarOptions().fontSize or 11 end,
+        function(value) GetSearchBarOptions().fontSize = value; ScheduleObjectiveTrackerAppearanceSoftRefresh() end,
+        function(value) return FormatSliderValue(value, 0, " px") end
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.searchBarFontSizeSlider
+
+    objectiveTrackerControls.searchBarTextColorButton = CreateColorButton(
+        objectiveTrackerCards.searchBar, APPEARANCE_RIGHT_COLUMN_X, -230, "Text Color",
+        function() return GetSearchBarOptions().textColor or { r = 1, g = 1, b = 1, a = 1 } end,
+        function(value) GetSearchBarOptions().textColor = value; RefreshZoneDividerAndSearchOptionsImmediate() end,
+        { hasOpacity = false, width = APPEARANCE_COLUMN_WIDTH }
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.searchBarTextColorButton
+
+    objectiveTrackerControls.searchBarPlaceholderColorButton = CreateColorButton(
+        objectiveTrackerCards.searchBar, 18, -304, "Placeholder Color",
+        function() return GetSearchBarOptions().placeholderColor or { r = 0.5, g = 0.5, b = 0.5, a = 1 } end,
+        function(value) GetSearchBarOptions().placeholderColor = value; RefreshZoneDividerAndSearchOptionsImmediate() end,
+        { width = APPEARANCE_COLUMN_WIDTH }
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.searchBarPlaceholderColorButton
+
+    objectiveTrackerControls.searchBarHeightSlider = CreateSlider(
+        objectiveTrackerCards.searchBar, APPEARANCE_RIGHT_COLUMN_X, -304, "Height", APPEARANCE_COLUMN_WIDTH, 16, 48, 1,
+        function() return GetSearchBarOptions().height or 16 end,
+        function(value) GetSearchBarOptions().height = value; ScheduleObjectiveTrackerAppearanceSoftRefresh() end,
+        function(value) return FormatSliderValue(value, 0, " px") end
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.searchBarHeightSlider
+
+    objectiveTrackerControls.searchBarBgTextureLabel = CreateSubsectionTitle(objectiveTrackerCards.searchBar, "Texture", 18, -378)
+
+    objectiveTrackerControls.searchBarBgTextureDropdown = CreateStatusBarTextureDropdown(
+        objectiveTrackerCards.searchBar, 18, -416, "Background Texture", APPEARANCE_COLUMN_WIDTH,
+        function() return GetSearchBarOptions().backgroundTexture or ns.GLOBAL_CHOICE_KEY end,
+        function(value) GetSearchBarOptions().backgroundTexture = value; RefreshZoneDividerAndSearchOptionsImmediate() end,
+        "Default Status Bar"
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.searchBarBgTextureDropdown
+
+    objectiveTrackerControls.searchBarBorderTextureDropdown = CreateStatusBarTextureDropdown(
+        objectiveTrackerCards.searchBar, 18, -490, "Border Texture", APPEARANCE_COLUMN_WIDTH,
+        function() return GetSearchBarOptions().borderTexture or ns.GLOBAL_CHOICE_KEY end,
+        function(value) GetSearchBarOptions().borderTexture = value; RefreshZoneDividerAndSearchOptionsImmediate() end,
+        "Default",
+        {
+            choiceProvider = ns.GetBorderTextureChoices,
+            labelProvider = ns.GetBorderTextureLabel,
+            previewMode = "border",
+            texturePathResolver = ns.GetBorderTexturePath,
+        }
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.searchBarBorderTextureDropdown
+
+    objectiveTrackerControls.searchBarBorderSizeSlider = CreateSlider(
+        objectiveTrackerCards.searchBar, APPEARANCE_RIGHT_COLUMN_X, -490, "Border Size", APPEARANCE_COLUMN_WIDTH, -10, 10, 1,
+        function() return GetSearchBarOptions().borderSize or 1 end,
+        function(value) GetSearchBarOptions().borderSize = value; ScheduleObjectiveTrackerAppearanceSoftRefresh() end,
+        function(value) return FormatSliderValue(value, 0, " px") end
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.searchBarBorderSizeSlider
+
+    objectiveTrackerControls.searchBarBorderColorButton = CreateColorButton(
+        objectiveTrackerCards.searchBar, 18, -564, "Border Color",
+        function() return GetSearchBarOptions().borderColor or { r = 0.3, g = 0.3, b = 0.3, a = 1 } end,
+        function(value) GetSearchBarOptions().borderColor = value; RefreshZoneDividerAndSearchOptionsImmediate() end,
+        { hasOpacity = false, width = APPEARANCE_COLUMN_WIDTH }
+    )
+    objectiveTrackerAppearancePanel.refreshers[#objectiveTrackerAppearancePanel.refreshers + 1] = objectiveTrackerControls.searchBarBorderColorButton
+
     objectiveTrackerCards.header = CreateSectionCard(
         objectiveTrackerAppearanceContent,
         sectionX,
@@ -7661,6 +8072,7 @@ function ns.InitializeOptions()
         { key = "title",      name = "Title" },
         { key = "minimize",   name = "Minimize Button" },
         { key = "trackerTrackAll", name = "Track All Button" },
+        { key = "filterButton", name = "Filter Button" },
     }
 
     GetHeaderComponentState = function(key)
@@ -7672,6 +8084,8 @@ function ns.InitializeOptions()
             return GetObjectiveTrackerButtonOptions().minimize ~= false
         elseif key == "trackerTrackAll" then
             return GetObjectiveTrackerButtonOptions().trackerTrackAll ~= false
+        elseif key == "filterButton" then
+            return GetObjectiveTrackerButtonOptions().filterButton ~= false
         end
         return false
     end
@@ -7701,6 +8115,8 @@ function ns.InitializeOptions()
             GetObjectiveTrackerButtonOptions().minimize = value and true or false
         elseif key == "trackerTrackAll" then
             GetObjectiveTrackerButtonOptions().trackerTrackAll = value and true or false
+        elseif key == "filterButton" then
+            GetObjectiveTrackerButtonOptions().filterButton = value and true or false
         end
         SyncHeaderEnabledToComponentState()
     end
@@ -7775,6 +8191,21 @@ function ns.InitializeOptions()
         end
     )
     objectiveTrackerSectionsPanel.refreshers[#objectiveTrackerSectionsPanel.refreshers + 1] = objectiveTrackerControls.focusedQuestSection
+
+    objectiveTrackerControls.searchSection = CreateCheckbox(
+        objectiveTrackerCards.sectionsGeneral,
+        "Show Search Bar Section",
+        18,
+        -116,
+        function()
+            return GetSearchBarOptions().enabled ~= false
+        end,
+        function(value)
+            GetSearchBarOptions().enabled = value and true or false
+            RefreshObjectiveTrackerStructureOptionsPanel()
+        end
+    )
+    objectiveTrackerSectionsPanel.refreshers[#objectiveTrackerSectionsPanel.refreshers + 1] = objectiveTrackerControls.searchSection
 
     objectiveTrackerCards.zone = CreateSectionCard(
         objectiveTrackerSectionsContent,
@@ -7911,6 +8342,7 @@ function ns.InitializeOptions()
         PositionControl(objectiveTrackerControls.enabled, objectiveTrackerCards.general, 18, -82)
         SetControlEnabled(objectiveTrackerControls.questLogTrackAll, true)
         PositionControl(objectiveTrackerControls.questLogTrackAll, objectiveTrackerCards.general, 18, -112)
+        PositionControl(objectiveTrackerControls.groupByZone, objectiveTrackerCards.general, 18, -142)
         FitSectionCardHeight(objectiveTrackerCards.general, 20)
         FitScrollContentHeight(objectiveTrackerContent, self:GetHeight() - 16, 36)
     end
@@ -7940,8 +8372,8 @@ function ns.InitializeOptions()
 
         objectiveTrackerCards.minimap:ClearAllPoints()
         objectiveTrackerCards.minimap:SetPoint("TOPLEFT", objectiveTrackerLayoutContent, "TOPLEFT", sectionX, currentY)
-        PositionControl(objectiveTrackerControls.generalMatchMinimapWidth, objectiveTrackerCards.minimap, 18, -82)
-        PositionControl(objectiveTrackerControls.generalAttachToMinimap, objectiveTrackerCards.minimap, 18, -112)
+        PositionControl(objectiveTrackerControls.generalAttachToMinimap, objectiveTrackerCards.minimap, 18, -82)
+        PositionControl(objectiveTrackerControls.generalMatchMinimapWidth, objectiveTrackerCards.minimap, 18, -112)
         PositionControl(objectiveTrackerControls.generalMinimapAttachEdgeDropdown, objectiveTrackerCards.minimap, 18, -148)
         PositionControl(objectiveTrackerControls.generalMinimapYOffsetSlider, objectiveTrackerCards.minimap, APPEARANCE_RIGHT_COLUMN_X, -148)
         FitSectionCardHeight(objectiveTrackerCards.minimap, 20)
@@ -7987,6 +8419,9 @@ function ns.InitializeOptions()
         objectiveTrackerCards.preset:ClearAllPoints()
         objectiveTrackerCards.preset:SetPoint("TOPLEFT", objectiveTrackerAppearanceContent, "TOPLEFT", sectionX, currentY)
         PositionControl(objectiveTrackerControls.appearancePresetDropdown, objectiveTrackerCards.preset, 18, -68)
+        if objectiveTrackerControls.appearancePresetHint then
+            objectiveTrackerControls.appearancePresetHint:SetShown(GetObjectiveTrackerAppearanceOptions().preset ~= "nomtools")
+        end
         local presetCardHeight = FitSectionCardHeight(objectiveTrackerCards.preset, 20)
         currentY = currentY - presetCardHeight - cardSpacing
 
@@ -8247,19 +8682,78 @@ function ns.InitializeOptions()
         -- Card 7: Scrollbar
         objectiveTrackerCards.scrollBar:ClearAllPoints()
         objectiveTrackerCards.scrollBar:SetPoint("TOPLEFT", objectiveTrackerAppearanceContent, "TOPLEFT", sectionX, currentY)
-        PositionControl(objectiveTrackerControls.scrollEnabled, objectiveTrackerCards.scrollBar, 18, -82)
-        PositionControl(objectiveTrackerControls.scrollVisible, objectiveTrackerCards.scrollBar, appearanceRightColumnX, -82)
-        PositionControl(objectiveTrackerControls.scrollTextureDropdown, objectiveTrackerCards.scrollBar, 18, -154)
-        PositionControl(objectiveTrackerControls.scrollColorButton, objectiveTrackerCards.scrollBar, appearanceRightColumnX, -154)
-        PositionControl(objectiveTrackerControls.scrollWidthSlider, objectiveTrackerCards.scrollBar, 18, -228)
-        SetControlEnabled(objectiveTrackerControls.scrollVisible, scrollEnabled)
-        SetControlEnabled(objectiveTrackerControls.scrollTextureDropdown, scrollEnabled and scrollVisible)
-        SetControlEnabled(objectiveTrackerControls.scrollColorButton, scrollEnabled and scrollVisible)
-        SetControlEnabled(objectiveTrackerControls.scrollWidthSlider, scrollEnabled and scrollVisible)
+        PositionControl(objectiveTrackerControls.scrollEnabled,              objectiveTrackerCards.scrollBar, 18, -82)
+        PositionControl(objectiveTrackerControls.scrollVisible,              objectiveTrackerCards.scrollBar, appearanceRightColumnX, -82)
+        PositionControl(objectiveTrackerControls.scrollTextureDropdown,      objectiveTrackerCards.scrollBar, 18, -156)
+        PositionControl(objectiveTrackerControls.scrollColorButton,          objectiveTrackerCards.scrollBar, appearanceRightColumnX, -156)
+        PositionControl(objectiveTrackerControls.scrollBgColorButton,        objectiveTrackerCards.scrollBar, 18, -230)
+        PositionControl(objectiveTrackerControls.scrollBorderColorButton,    objectiveTrackerCards.scrollBar, appearanceRightColumnX, -230)
+        PositionControl(objectiveTrackerControls.scrollBorderTextureDropdown, objectiveTrackerCards.scrollBar, 18, -304)
+        PositionControl(objectiveTrackerControls.scrollBorderSizeSlider,     objectiveTrackerCards.scrollBar, appearanceRightColumnX, -304)
+        PositionControl(objectiveTrackerControls.scrollWidthSlider,          objectiveTrackerCards.scrollBar, 18, -378)
+        SetControlEnabled(objectiveTrackerControls.scrollVisible,              scrollEnabled)
+        SetControlEnabled(objectiveTrackerControls.scrollTextureDropdown,      scrollEnabled and scrollVisible)
+        SetControlEnabled(objectiveTrackerControls.scrollColorButton,          scrollEnabled and scrollVisible)
+        SetControlEnabled(objectiveTrackerControls.scrollBgColorButton,        scrollEnabled and scrollVisible)
+        SetControlEnabled(objectiveTrackerControls.scrollBorderColorButton,    scrollEnabled and scrollVisible)
+        SetControlEnabled(objectiveTrackerControls.scrollBorderTextureDropdown, scrollEnabled and scrollVisible)
+        SetControlEnabled(objectiveTrackerControls.scrollBorderSizeSlider,     scrollEnabled and scrollVisible)
+        SetControlEnabled(objectiveTrackerControls.scrollWidthSlider,          scrollEnabled and scrollVisible)
         local scrollBarCardHeight = FitSectionCardHeight(objectiveTrackerCards.scrollBar, 20)
         currentY = currentY - scrollBarCardHeight - cardSpacing
 
-        -- Card 8: Header Bar
+        -- Card 8: Zone Headers
+        objectiveTrackerCards.zoneHeaders:ClearAllPoints()
+        objectiveTrackerCards.zoneHeaders:SetPoint("TOPLEFT", objectiveTrackerAppearanceContent, "TOPLEFT", sectionX, currentY)
+        PositionControl(objectiveTrackerControls.zoneHeaderAlignLabel, objectiveTrackerCards.zoneHeaders, 18, -82)
+        PositionControl(objectiveTrackerControls.zoneHeaderAlignDropdown, objectiveTrackerCards.zoneHeaders, 18, -114)
+        PositionControl(objectiveTrackerControls.zoneHeaderSepLabel, objectiveTrackerCards.zoneHeaders, 18, -188)
+        PositionControl(objectiveTrackerControls.zoneHeaderShowLinesCheckbox, objectiveTrackerCards.zoneHeaders, 18, -220)
+        PositionControl(objectiveTrackerControls.zoneHeaderLineFadeCheckbox, objectiveTrackerCards.zoneHeaders, appearanceRightColumnX, -220)
+        PositionControl(objectiveTrackerControls.zoneHeaderLineColorButton, objectiveTrackerCards.zoneHeaders, 18, -260)
+        PositionControl(objectiveTrackerControls.zoneHeaderLineThicknessSlider, objectiveTrackerCards.zoneHeaders, appearanceRightColumnX, -260)
+        PositionControl(objectiveTrackerControls.zoneHeaderTypoLabel, objectiveTrackerCards.zoneHeaders, 18, -334)
+        PositionControl(objectiveTrackerControls.zoneHeaderFontDropdown, objectiveTrackerCards.zoneHeaders, 18, -366)
+        PositionControl(objectiveTrackerControls.zoneHeaderFontOutlineDropdown, objectiveTrackerCards.zoneHeaders, appearanceRightColumnX, -366)
+        PositionControl(objectiveTrackerControls.zoneHeaderFontSizeSlider, objectiveTrackerCards.zoneHeaders, 18, -440)
+        PositionControl(objectiveTrackerControls.zoneHeaderTextColorButton, objectiveTrackerCards.zoneHeaders, appearanceRightColumnX, -440)
+        PositionControl(objectiveTrackerControls.zoneHeaderBgLabel, objectiveTrackerCards.zoneHeaders, 18, -514)
+        PositionControl(objectiveTrackerControls.zoneHeaderShowBgCheckbox, objectiveTrackerCards.zoneHeaders, 18, -546)
+        PositionControl(objectiveTrackerControls.zoneHeaderBgTextureDropdown, objectiveTrackerCards.zoneHeaders, 18, -586)
+        PositionControl(objectiveTrackerControls.zoneHeaderBgColorButton, objectiveTrackerCards.zoneHeaders, appearanceRightColumnX, -586)
+        PositionControl(objectiveTrackerControls.zoneHeaderBorderTextureDropdown, objectiveTrackerCards.zoneHeaders, 18, -660)
+        PositionControl(objectiveTrackerControls.zoneHeaderBorderSizeSlider, objectiveTrackerCards.zoneHeaders, appearanceRightColumnX, -660)
+        PositionControl(objectiveTrackerControls.zoneHeaderBorderColorButton, objectiveTrackerCards.zoneHeaders, 18, -734)
+        PositionControl(objectiveTrackerControls.zoneHeaderHeightLabel, objectiveTrackerCards.zoneHeaders, 18, -808)
+        PositionControl(objectiveTrackerControls.zoneHeaderHeightSlider, objectiveTrackerCards.zoneHeaders, 18, -840)
+        local zoneHeadersCardHeight = FitSectionCardHeight(objectiveTrackerCards.zoneHeaders, 20)
+        currentY = currentY - zoneHeadersCardHeight - cardSpacing
+
+        -- Card 9: Search Bar (Custom preset only)
+        objectiveTrackerCards.searchBar:ClearAllPoints()
+        objectiveTrackerCards.searchBar:SetPoint("TOPLEFT", objectiveTrackerAppearanceContent, "TOPLEFT", sectionX, currentY)
+        if useNomToolsHeaderAppearance then
+            objectiveTrackerCards.searchBar:SetShown(true)
+            PositionControl(objectiveTrackerControls.searchBarShowBgCheckbox, objectiveTrackerCards.searchBar, 18, -82)
+            PositionControl(objectiveTrackerControls.searchBarBgColorButton, objectiveTrackerCards.searchBar, appearanceRightColumnX, -82)
+            PositionControl(objectiveTrackerControls.searchBarFontDropdown, objectiveTrackerCards.searchBar, 18, -156)
+            PositionControl(objectiveTrackerControls.searchBarFontOutlineDropdown, objectiveTrackerCards.searchBar, appearanceRightColumnX, -156)
+            PositionControl(objectiveTrackerControls.searchBarFontSizeSlider, objectiveTrackerCards.searchBar, 18, -230)
+            PositionControl(objectiveTrackerControls.searchBarTextColorButton, objectiveTrackerCards.searchBar, appearanceRightColumnX, -230)
+            PositionControl(objectiveTrackerControls.searchBarPlaceholderColorButton, objectiveTrackerCards.searchBar, 18, -304)
+            PositionControl(objectiveTrackerControls.searchBarHeightSlider, objectiveTrackerCards.searchBar, appearanceRightColumnX, -304)
+            PositionControl(objectiveTrackerControls.searchBarBgTextureLabel, objectiveTrackerCards.searchBar, 18, -378)
+            PositionControl(objectiveTrackerControls.searchBarBgTextureDropdown, objectiveTrackerCards.searchBar, 18, -416)
+            PositionControl(objectiveTrackerControls.searchBarBorderTextureDropdown, objectiveTrackerCards.searchBar, 18, -490)
+            PositionControl(objectiveTrackerControls.searchBarBorderSizeSlider, objectiveTrackerCards.searchBar, appearanceRightColumnX, -490)
+            PositionControl(objectiveTrackerControls.searchBarBorderColorButton, objectiveTrackerCards.searchBar, 18, -564)
+            local searchBarCardHeight = FitSectionCardHeight(objectiveTrackerCards.searchBar, 20)
+            currentY = currentY - searchBarCardHeight - cardSpacing
+        else
+            objectiveTrackerCards.searchBar:SetShown(false)
+        end
+
+        -- Card 10: Header Bar
         objectiveTrackerCards.header:ClearAllPoints()
         objectiveTrackerCards.header:SetPoint("TOPLEFT", objectiveTrackerAppearanceContent, "TOPLEFT", sectionX, currentY)
         local headerEnabled = SyncHeaderEnabledToComponentState()
@@ -8281,6 +8775,7 @@ function ns.InitializeOptions()
         objectiveTrackerCards.sectionsGeneral:ClearAllPoints()
         objectiveTrackerCards.sectionsGeneral:SetPoint("TOPLEFT", objectiveTrackerSectionsContent, "TOPLEFT", sectionX, currentY)
         PositionControl(objectiveTrackerControls.focusedQuestSection, objectiveTrackerCards.sectionsGeneral, 18, -82)
+        PositionControl(objectiveTrackerControls.searchSection, objectiveTrackerCards.sectionsGeneral, 18, -116)
         local sectionsGeneralCardHeight = FitSectionCardHeight(objectiveTrackerCards.sectionsGeneral, 20)
         currentY = currentY - sectionsGeneralCardHeight - cardSpacing
 
@@ -8662,6 +9157,13 @@ function ns.InitializeOptions()
     )
     remindersAppearancePanel.refreshers[#remindersAppearancePanel.refreshers + 1] = remindersAppearancePresetDropdown
 
+    remindersAppearanceCard.presetHint = remindersAppearanceCard:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    remindersAppearanceCard.presetHint:SetPoint("TOPLEFT", remindersAppearancePresetDropdown, "BOTTOMLEFT", 0, -6)
+    remindersAppearanceCard.presetHint:SetWidth(APPEARANCE_COLUMN_WIDTH)
+    remindersAppearanceCard.presetHint:SetJustifyH("LEFT")
+    remindersAppearanceCard.presetHint:SetText("Change to |cFFFFD100Custom|r to unlock all appearance options.")
+    remindersAppearanceCard.presetHint:SetTextColor(ACCENT_SUBTLE_R, ACCENT_SUBTLE_G, ACCENT_SUBTLE_B)
+
     local remindersAppearanceFontDropdown = CreateFontDropdown(
         remindersAppearanceCard,
         18,
@@ -8970,6 +9472,7 @@ function ns.InitializeOptions()
         SetControlEnabled(remindersAppearanceBackgroundColorButton, useNomToolsAppearance)
         SetControlEnabled(remindersAppearanceBorderColorButton, useNomToolsAppearance)
         SetControlEnabled(remindersAppearanceBorderSizeSlider, useNomToolsAppearance)
+        remindersAppearanceCard.presetHint:SetShown(not useNomToolsAppearance)
         FitSectionCardHeight(remindersAppearanceCard, 20)
         FitScrollContentHeight(remindersAppearanceContent, self:GetHeight() - 16, 36)
     end
@@ -9528,7 +10031,7 @@ function ns.InitializeOptions()
 
     do
     local housingContent
-    local housingDefaults = ns.DEFAULTS and ns.DEFAULTS.housing or { enabled = true, customSort = true, showNewMarkers = true, newMarkersFirstOwnershipOnly = false, vendorMultiBuy = true, vendorThrottle = true }
+    local housingDefaults = ns.DEFAULTS and ns.DEFAULTS.housing or { enabled = true, customSort = true, showNewMarkers = true, newMarkersFirstOwnershipOnly = false, vendorMultiBuy = true, vendorThrottle = true, autoConfirmDecorPurchase = false }
     local function CommitHousingOption(settingKey, value)
         local normalizedValue = value and true or false
 
@@ -9585,12 +10088,14 @@ function ns.InitializeOptions()
                         ns.SetHousingSetting("newMarkersFirstOwnershipOnly", housingDefaults.newMarkersFirstOwnershipOnly)
                         ns.SetHousingSetting("vendorMultiBuy", housingDefaults.vendorMultiBuy)
                         ns.SetHousingSetting("vendorThrottle", housingDefaults.vendorThrottle)
+                        ns.SetHousingSetting("autoConfirmDecorPurchase", housingDefaults.autoConfirmDecorPurchase)
                     else
                         ns.db.housing.customSort = housingDefaults.customSort
                         ns.db.housing.showNewMarkers = housingDefaults.showNewMarkers
                         ns.db.housing.newMarkersFirstOwnershipOnly = housingDefaults.newMarkersFirstOwnershipOnly
                         ns.db.housing.vendorMultiBuy = housingDefaults.vendorMultiBuy
                         ns.db.housing.vendorThrottle = housingDefaults.vendorThrottle
+                        ns.db.housing.autoConfirmDecorPurchase = housingDefaults.autoConfirmDecorPurchase
                     end
                 end
             end,
@@ -9716,12 +10221,76 @@ function ns.InitializeOptions()
     )
     housingPanel.refreshers[#housingPanel.refreshers + 1] = vendorThrottleCheckbox
 
+    local autoConfirmDecorPurchaseCheckbox = CreateCheckbox(
+        housingCardImprovements,
+        'Auto-Confirm Decor Purchase Prompts',
+        18,
+        -334,
+        function()
+            local s = ns.GetHousingSettings and ns.GetHousingSettings() or nil
+            return s and s.autoConfirmDecorPurchase == true
+        end,
+        function(value)
+            CommitHousingOption("autoConfirmDecorPurchase", value)
+        end
+    )
+    housingPanel.refreshers[#housingPanel.refreshers + 1] = autoConfirmDecorPurchaseCheckbox
+
+    -- Debug-only section: preview the multi-buy progress panel
+    local housingCardDebug = CreateSectionCard(
+        housingContent,
+        sectionX,
+        -580,   -- placeholder Y; overridden by UpdateLayout
+        sectionWidth,
+        112,
+        "Debug",
+        "Developer tools for testing housing features."
+    )
+
+    local debugPreviewTicker = nil
+    local debugPreviewStep = 0
+    local DEBUG_PREVIEW_TOTAL = 7
+
+    local debugPreviewCheckbox = CreateCheckbox(
+        housingCardDebug,
+        "Preview Multi-Buy Progress Panel",
+        18,
+        -82,
+        function()
+            return debugPreviewTicker ~= nil
+        end,
+        function(value)
+            if value then
+                debugPreviewStep = 0
+                if ns.ShowMultiBuyProgressPreview then
+                    ns.ShowMultiBuyProgressPreview("Rustic Armchair", 0, DEBUG_PREVIEW_TOTAL)
+                end
+                debugPreviewTicker = C_Timer.NewTicker(0.4, function()
+                    debugPreviewStep = (debugPreviewStep % DEBUG_PREVIEW_TOTAL) + 1
+                    if ns.ShowMultiBuyProgressPreview then
+                        ns.ShowMultiBuyProgressPreview("Rustic Armchair", debugPreviewStep, DEBUG_PREVIEW_TOTAL)
+                    end
+                end)
+            else
+                if debugPreviewTicker then
+                    debugPreviewTicker:Cancel()
+                    debugPreviewTicker = nil
+                end
+                if ns.HideMultiBuyProgressPreview then
+                    ns.HideMultiBuyProgressPreview()
+                end
+            end
+        end
+    )
+    housingPanel.refreshers[#housingPanel.refreshers + 1] = debugPreviewCheckbox
+
     housingPanel.UpdateLayout = function(self)
         local currentY = PAGE_SECTION_START_Y
         local cardSpacing = 20
         local housingSettings = ns.GetHousingSettings and ns.GetHousingSettings() or nil
         local showNewMarkers = housingSettings == nil or housingSettings.showNewMarkers ~= false
         local vendorMultiBuy = housingSettings == nil or housingSettings.vendorMultiBuy ~= false
+        local isDebug = ns.IsDebugEnabled and ns.IsDebugEnabled()
 
         housingCardGeneral:ClearAllPoints()
         housingCardGeneral:SetPoint("TOPLEFT", housingContent, "TOPLEFT", sectionX, currentY)
@@ -9737,9 +10306,29 @@ function ns.InitializeOptions()
         PositionControl(housingVendorsLabel, housingCardImprovements, 18, -232)
         PositionControl(vendorMultiBuyCheckbox, housingCardImprovements, 18, -270)
         PositionControl(vendorThrottleCheckbox, housingCardImprovements, 18, -302)
+        PositionControl(autoConfirmDecorPurchaseCheckbox, housingCardImprovements, 18, -334)
         SetControlEnabled(firstOwnershipOnlyCheckbox, showNewMarkers)
         SetControlEnabled(vendorThrottleCheckbox, vendorMultiBuy)
-        FitSectionCardHeight(housingCardImprovements, 20)
+        local improvementsCardHeight = FitSectionCardHeight(housingCardImprovements, 20)
+        currentY = currentY - improvementsCardHeight - cardSpacing
+
+        if isDebug then
+            housingCardDebug:ClearAllPoints()
+            housingCardDebug:SetPoint("TOPLEFT", housingContent, "TOPLEFT", sectionX, currentY)
+            PositionControl(debugPreviewCheckbox, housingCardDebug, 18, -82)
+            FitSectionCardHeight(housingCardDebug, 20)
+            housingCardDebug:Show()
+        else
+            if debugPreviewTicker then
+                debugPreviewTicker:Cancel()
+                debugPreviewTicker = nil
+                if ns.HideMultiBuyProgressPreview then
+                    ns.HideMultiBuyProgressPreview()
+                end
+            end
+            housingCardDebug:Hide()
+        end
+
         FitScrollContentHeight(housingContent, housingPanel:GetHeight() - 16, 36)
     end
 

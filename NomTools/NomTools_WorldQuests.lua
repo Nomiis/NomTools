@@ -415,6 +415,18 @@ local function SaveFilterState()
     ns.SetWorldQuestsSetting("excludedMaps", excludedMapsCopy)
 end
 
+function eventFrame:IsWQFilterDefault()
+    if next(filterTypes) then return false end
+    if next(filterRewards) then return false end
+    if sortMode ~= "time" then return false end
+    if zoneSortMode ~= "time" then return false end
+    return true
+end
+
+function eventFrame:UpdateWQFilterResetState()
+    -- No-op: reset is now inside the dropdown menu
+end
+
 ---@param mapID number
 ---@return boolean
 function eventFrame:IsWorldQuestMapExcluded(mapID)
@@ -9750,6 +9762,7 @@ local function CreateQuestMapTab()
             SaveFilterState()
             UpdateZoneSortChecks()
             ScheduleRefresh()
+            eventFrame:UpdateWQFilterResetState()
         end)
         zb.sortKey = def.key
         zoneSortButtons[#zoneSortButtons + 1] = zb
@@ -9789,6 +9802,7 @@ local function CreateQuestMapTab()
             SaveFilterState()
             UpdateQuestSortChecks()
             ScheduleRefresh()
+            eventFrame:UpdateWQFilterResetState()
         end)
         sb.sortKey = def.key
         sortButtons[#sortButtons + 1] = sb
@@ -9828,6 +9842,7 @@ local function CreateQuestMapTab()
             SaveFilterState()
             UpdateTypeChecks()
             ScheduleRefresh()
+            eventFrame:UpdateWQFilterResetState()
         end)
         tb.typeKey = typeKey
         typeButtons[#typeButtons + 1] = tb
@@ -9867,12 +9882,56 @@ local function CreateQuestMapTab()
             SaveFilterState()
             UpdateRewardChecks()
             ScheduleRefresh()
+            eventFrame:UpdateWQFilterResetState()
         end)
         rb.rewardKey = rewardKey
         rewardButtons[#rewardButtons + 1] = rb
         lastRewardAnchor = rb
         curY = curY - 20
     end
+
+    -- ── Reset Filters button at bottom ────────────────────────────────
+    local divReset = dropFrame:CreateTexture(nil, "ARTWORK")
+    divReset:SetHeight(1)
+    divReset:SetPoint("TOPLEFT",  dropFrame, "TOPLEFT",  8, curY - 4)
+    divReset:SetPoint("TOPRIGHT", dropFrame, "TOPRIGHT", -8, curY - 4)
+    divReset:SetColorTexture(0.3, 0.3, 0.3, 0.8)
+    curY = curY - 12
+
+    local resetBtn = CreateFrame("Button", nil, dropFrame)
+    resetBtn:SetHeight(20)
+    resetBtn:SetPoint("TOPLEFT", dropFrame, "TOPLEFT", 8, curY)
+    resetBtn:SetPoint("TOPRIGHT", dropFrame, "TOPRIGHT", -8, curY)
+    local resetLabel = resetBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    resetLabel:SetPoint("CENTER")
+    resetLabel:SetText(RESET)
+    resetLabel:SetTextColor(1, 0.82, 0)
+    resetBtn:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestLogTitleHighlight", "ADD")
+    resetBtn:SetScript("OnClick", function()
+        wipe(filterTypes)
+        wipe(filterRewards)
+        sortMode     = "time"
+        zoneSortMode = "time"
+        SaveFilterState()
+        UpdateZoneSortChecks()
+        UpdateQuestSortChecks()
+        UpdateTypeChecks()
+        UpdateRewardChecks()
+        eventFrame:UpdateWQFilterResetState()
+        ScheduleRefresh()
+        PlaySound(SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON)
+    end)
+    resetBtn:SetScript("OnEnter", function()
+        if not eventFrame:IsWQFilterDefault() then
+            resetLabel:SetTextColor(1, 1, 1)
+        else
+            resetLabel:SetTextColor(0.5, 0.5, 0.5)
+        end
+    end)
+    resetBtn:SetScript("OnLeave", function()
+        resetLabel:SetTextColor(1, 0.82, 0)
+    end)
+    curY = curY - 22
 
     dropFrame:SetHeight(math.abs(curY) + 12)
 
@@ -9889,6 +9948,7 @@ local function CreateQuestMapTab()
             dropFrame:Show()
             dropCloseListener:Show()
         end
+        eventFrame:UpdateWQFilterResetState()
     end)
 
     -- ── Scroll frame (ScrollFrameTemplate provides a WowTrimScrollBar) ─────
@@ -10119,6 +10179,7 @@ end
 -- filter locals re-sync from the DB and the quest list refreshes.
 function ns.SyncAndRefreshWorldQuests(clearSearch)
     SyncFilterState(clearSearch == true)
+    eventFrame:UpdateWQFilterResetState()
     ApplyWorldQuestTypography()
     if questMapPanel and questMapPanel:IsShown() then
         ScheduleRefresh()
@@ -10164,6 +10225,7 @@ function ns.InitializeWorldQuestsModule()
 
     -- Load persisted filter/sort state before first refresh.
     SyncFilterState(true)
+    eventFrame:UpdateWQFilterResetState()
 
     -- Build the tab and panel (deferred by one tick if QuestMapFrame children
     -- are not fully initialised yet — ContentsAnchor may have zero size).

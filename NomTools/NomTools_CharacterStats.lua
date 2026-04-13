@@ -43,7 +43,7 @@ local BLIZZARD_FRAME_BACKDROP = {
     insets = { left = 4, right = 4, top = 4, bottom = 4 },
 }
 local BLIZZARD_FRAME_BG_COLOR = { r = 0, g = 0, b = 0, a = 0.75 }
-local BLIZZARD_FRAME_BORDER_COLOR = { r = 0.6, g = 0.6, b = 0.6, a = 1 }
+local BLIZZARD_FRAME_BORDER_COLOR = { r = 0, g = 0, b = 0, a = 1 }
 
 local NOMTOOLS_FRAME_BACKDROP = {
     bgFile = "Interface\\Buttons\\WHITE8x8",
@@ -289,8 +289,8 @@ local function GetAppearanceSettings(settings)
 
         if includeNomToolsExtras then
             profile.backgroundOpacity = math.floor(Clamp(profile.backgroundOpacity, 0, 100, profileDefaults.backgroundOpacity or 80) + 0.5)
-            profile.backgroundColor = NormalizeColor(profile.backgroundColor, profileDefaults.backgroundColor or { r = 0.05, g = 0.05, b = 0.05, a = 1 })
-            profile.borderColor = NormalizeColor(profile.borderColor, profileDefaults.borderColor or { r = 0.25, g = 0.25, b = 0.25, a = 1 })
+            profile.backgroundColor = NormalizeColor(profile.backgroundColor, profileDefaults.backgroundColor or { r = 0, g = 0, b = 0, a = 1 })
+            profile.borderColor = NormalizeColor(profile.borderColor, profileDefaults.borderColor or { r = 0, g = 0, b = 0, a = 1 })
             profile.borderSize = NormalizeBorderSize(profile.borderSize, profileDefaults.borderSize or 1)
             if type(profile.texture) ~= "string" or profile.texture == "" then
                 profile.texture = profileDefaults.texture or ns.GLOBAL_CHOICE_KEY

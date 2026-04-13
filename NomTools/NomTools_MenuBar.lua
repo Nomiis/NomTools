@@ -72,6 +72,7 @@ local menuBarRegisteredWithLEM = false
 local queueEyeRegisteredWithLEM = false
 local anchorState = {
     menuBarTarget = false,
+    isLayouting = false,
 }
 
 -- Whether our hooks are currently blocking Blizzard's queue-eye self-anchoring.
@@ -455,7 +456,7 @@ local function ResizeMenuBarContainer()
 
     local width, height = GetEffectiveFrameSize(microMenu, 180, 32)
     container:SetSize(width, height)
-    if microMenu.Layout then
+    if microMenu.Layout and container:GetCenter() then
         microMenu:Layout()
     end
 end
@@ -557,7 +558,9 @@ local function InstallBlizzardHooks()
     if container and container.SetPoint and not container._nomToolsSetPointHooked then
         container._nomToolsSetPointHooked = true
         hooksecurefunc(container, "SetPoint", function(self)
-            ReassertMenuBarTargetAnchor()
+            if not anchorState.isLayouting then
+                ReassertMenuBarTargetAnchor()
+            end
         end)
     end
 end
@@ -714,6 +717,7 @@ end
 
 local function LayoutMenuBar()
     local target = GetMenuBarTarget()
+    anchorState.isLayouting = true
 
     -- First-time activation should use NomTools's default split-bar position,
     -- not Blizzard's current micro menu anchor.
@@ -735,6 +739,7 @@ local function LayoutMenuBar()
             HidePlaceholder(menuBarHolder)
             menuBarHolder:Hide()
         end
+        anchorState.isLayouting = false
         return
     end
 
@@ -752,11 +757,13 @@ local function LayoutMenuBar()
     if ns.isEditMode or IsOptionsPreviewActive() then
         ShowPlaceholder(menuBarHolder, MENU_BAR_EDIT_MODE_LABEL, width, height)
         menuBarHolder:Show()
+        anchorState.isLayouting = false
         return
     end
 
     HidePlaceholder(menuBarHolder)
     menuBarHolder:Hide()
+    anchorState.isLayouting = false
 end
 
 local function LayoutQueueEye()

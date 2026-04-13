@@ -155,7 +155,7 @@ local function GetDebugOverlayFrame()
 
     local background = frame:CreateTexture(nil, "BACKGROUND")
     background:SetAllPoints()
-    background:SetColorTexture(0, 0, 0, 0.68)
+    background:SetColorTexture(0, 0, 0, 0.8)
     frame.background = background
 
     local text = frame:CreateFontString(nil, "ARTWORK")
