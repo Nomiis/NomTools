@@ -1,0 +1,10 @@
+## Interface: 120001
+## Title: NomTools Objective Tracker
+## Notes: Load-on-demand objective tracker module for NomTools.
+## IconTexture: Interface\AddOns\NomTools\media\NomTools_Icon.png
+## Author: Nomiis
+## Version: 1.0.2
+## Dependencies: NomTools
+## LoadOnDemand: 1
+
+..\NomTools\NomTools_ObjectiveTracker.lua

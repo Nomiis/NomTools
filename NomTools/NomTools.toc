@@ -1,0 +1,23 @@
+﻿## Interface: 120001
+## Title: NomTools
+## Notes: Various modular and customizable improvements to the default UI and additional useful tools.
+## Category: User Interface
+## Author: Nomiis
+## Version: 1.1.0
+## IconTexture: Interface\AddOns\NomTools\media\NomTools_Icon.png
+## OptionalDeps: LibSharedMedia-3.0, SharedMedia, SharedMedia_MyMedia, SharedMediaAdditionalFonts
+## SavedVariables: NomToolsDB
+
+libs\LibStub\LibStub.lua
+libs\LibEditMode\embed.xml
+libs\LibCustomGlow-1.0\LibCustomGlow-1.0.lua
+
+NomTools_Data.lua
+NomTools_Shared.lua
+NomTools_Settings.lua
+NomTools_Changelog.lua
+NomTools_SetupWizard.lua
+NomTools_Core.lua
+NomTools_Launchers.lua
+NomTools_Debug.lua
+NomTools_EditMode.lua
