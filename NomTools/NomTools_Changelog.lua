@@ -127,7 +127,7 @@ do
                     },
                 },
                 {
-                    title = "Final",
+                    title = "Other",
                     bullets = {
                         "Various other small fixes and changes.",
                     },
