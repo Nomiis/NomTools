@@ -12,6 +12,21 @@ do
     -- Keep the newest entry first. This table is intended to be edited by hand.
     local CHANGELOG_ENTRIES = {
         {
+            id = 2026041402,
+            title = "1.2.1 - 14 April 2026",
+            description = "World Quests receives two targeted fixes for hover stability and reward data retrieval.",
+            important = false,
+            sections = {
+                {
+                    title = "World Quests",
+                    bullets = {
+                        "Fixed an issue causing hovering a world quest to sometimes produce an error.",
+                        "Fixed an issue causing world quest rewards to sometimes get stuck on Retrieving data indefinitely.",
+                    },
+                },
+            },
+        },
+        {
             id = 2026041401,
             title = "1.2.0 - 14 April 2026",
             description = "Objective Tracker gains search, filtering, and sorting, along with zone grouping. Housing gets an auto-confirm option and a multi-buy error fix.",
@@ -381,7 +396,19 @@ do
         local pageTags = {}
         local optionRowTags = {}
 
-        local entry = CHANGELOG_ENTRIES[1]
+        -- NEW badges should be anchored to the most recent important release.
+        local entry
+        for _, changelogEntry in ipairs(CHANGELOG_ENTRIES) do
+            if changelogEntry.important == true then
+                entry = changelogEntry
+                break
+            end
+        end
+
+        if not entry then
+            entry = CHANGELOG_ENTRIES[1]
+        end
+
         if entry then
             AddTagBlock(optionTags, pageTags, optionRowTags, entry.new)
 
@@ -561,6 +588,43 @@ do
         end
 
         return true
+    end
+
+    local function GetLatestImportantChangelogEntry()
+        for _, entry in ipairs(CHANGELOG_ENTRIES) do
+            if entry.important == true then
+                return entry
+            end
+        end
+
+        return nil
+    end
+
+    local function GetLatestEligibleChangelogPopupEntry()
+        local settings = GetChangelogSettingsTable()
+        local popupMode = NormalizePopupMode(settings.popupMode)
+        settings.popupMode = popupMode
+
+        if popupMode == "off" then
+            return nil
+        end
+
+        if popupMode == "important" then
+            local latestImportantEntry = GetLatestImportantChangelogEntry()
+            if IsChangelogPopupEntryEligible(latestImportantEntry) then
+                return latestImportantEntry
+            end
+
+            return nil
+        end
+
+        for _, entry in ipairs(CHANGELOG_ENTRIES) do
+            if IsChangelogPopupEntryEligible(entry) then
+                return entry
+            end
+        end
+
+        return nil
     end
 
     local function ScheduleChangelogPopupReopen()
@@ -836,8 +900,7 @@ do
             return false
         end
 
-        local entry = ns.GetLatestChangelogEntry()
-        return IsChangelogPopupEntryEligible(entry)
+        return GetLatestEligibleChangelogPopupEntry() ~= nil
     end
 
     function ns.ResetChangelogPopupWindowPositions()
@@ -872,7 +935,12 @@ do
     end
 
     function ns.TryShowChangelogPopup()
-        if not ns.ShouldShowChangelogPopup() then
+        if popupShownThisSession then
+            return false
+        end
+
+        local entry = GetLatestEligibleChangelogPopupEntry()
+        if not entry then
             return false
         end
 
@@ -880,10 +948,10 @@ do
 
         if C_Timer and C_Timer.After then
             C_Timer.After(0, function()
-                ns.ShowChangelogPopup(ns.GetLatestChangelogEntry())
+                ns.ShowChangelogPopup(entry)
             end)
         else
-            ns.ShowChangelogPopup(ns.GetLatestChangelogEntry())
+            ns.ShowChangelogPopup(entry)
         end
 
         return true

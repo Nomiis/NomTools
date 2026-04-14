@@ -8,6 +8,9 @@ if not ns then
     return
 end
 
+-- Hierarchy of maps to scan for world quests.
+-- Starts with the broadest zoom level (World) and works its way down.
+-- Maps not selected in the options UI are skipped.
 ns.WORLD_QUEST_SCAN_HIERARCHY = {
     mapID = 946,  -- Cosmic / World
     children = {
@@ -31,7 +34,7 @@ ns.WORLD_QUEST_SCAN_HIERARCHY = {
     },
 }
 
--- Human-readable labels for maps in the scan hierarchy.
+-- Labels for maps in the scan hierarchy.
 -- Used by the options UI and in-panel filter menus.
 ns.WORLD_QUEST_SCAN_MAP_LABELS = {
     [946]  = "World",

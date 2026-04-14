@@ -64,6 +64,7 @@ local TIME_RED             = 3600    -- < 1 hour
 local TIME_ORANGE          = 21600   -- < 6 hours
 local TIME_YELLOW          = 43200   -- < 12 hours
 local QUEST_DATA_RETRY_COOLDOWN = 30
+local QUEST_CORE_DATA_REQUEST_STALE_TIMEOUT = 10
 
 -- Color palette stored as { r, g, b [,a] } tables.
 local COL = {
@@ -157,7 +158,33 @@ local activeTooltipAnchor
 local activeTooltipQuestID
 local activeTooltipShowTrackHint = false
 
-function DebugHoverTrace(tag, fmt, ...)
+local activeHoverState = {
+    pinMisses = 0,
+    surfaceMisses = 0,
+    stopToken = 0,
+    fxPin = nil,
+}
+local questRowPool       = {}  -- inactive (recycled) quest row frames
+local zoneHeaderPool     = {}  -- inactive zone header frames
+local activeContent      = {}  -- ordered list of { type="zone"|"row", frame=f }
+local collapseState      = {}  -- collapseState[zoneName] = true when zone is collapsed
+local refreshPending         = false
+local refreshPendingAnimateRows = true
+local displayHookRegistered  = false
+local eventFrame             = CreateFrame("Frame")
+eventFrame._activeWorldQuestRawIDs = {}
+eventFrame._descendantGatherGeneration = 0
+eventFrame._descendantGatherSession = nil
+eventFrame._currentQuestEntriesByID = {}
+eventFrame._sessionScannedQueryMapIDs = {}
+eventFrame._sessionRawEntries = {}
+eventFrame._sessionRawEntriesSeen = {}
+eventFrame._sessionEnrichedEntries = {}
+eventFrame._sessionEnrichedEntriesSeen = {}
+eventFrame._sessionQueryStateCache = {}
+eventFrame._excludedMaps = {}
+eventFrame._typographyVersion = 0
+eventFrame._DebugHoverTrace = function(tag, fmt, ...)
     if not ns.IsDebugEnabled() then
         return
     end
@@ -209,7 +236,7 @@ end
 
 ---@param row Frame?
 ---@return string
-function GetHoverRowIdentity(row)
+eventFrame._GetHoverRowIdentity = function(row)
     if not ns.IsDebugEnabled() then
         return ""
     end
@@ -221,33 +248,6 @@ function GetHoverRowIdentity(row)
     local rowQuestID = rawget(row, "questID")
     return string_format("%s(q=%s)", tostring(row), tostring(rowQuestID))
 end
-
-local activeHoverState = {
-    pinMisses = 0,
-    surfaceMisses = 0,
-    stopToken = 0,
-    fxPin = nil,
-}
-local questRowPool       = {}  -- inactive (recycled) quest row frames
-local zoneHeaderPool     = {}  -- inactive zone header frames
-local activeContent      = {}  -- ordered list of { type="zone"|"row", frame=f }
-local collapseState      = {}  -- collapseState[zoneName] = true when zone is collapsed
-local refreshPending         = false
-local refreshPendingAnimateRows = true
-local displayHookRegistered  = false
-local eventFrame             = CreateFrame("Frame")
-eventFrame._activeWorldQuestRawIDs = {}
-eventFrame._descendantGatherGeneration = 0
-eventFrame._descendantGatherSession = nil
-eventFrame._currentQuestEntriesByID = {}
-eventFrame._sessionScannedQueryMapIDs = {}
-eventFrame._sessionRawEntries = {}
-eventFrame._sessionRawEntriesSeen = {}
-eventFrame._sessionEnrichedEntries = {}
-eventFrame._sessionEnrichedEntriesSeen = {}
-eventFrame._sessionQueryStateCache = {}
-eventFrame._excludedMaps = {}
-eventFrame._typographyVersion = 0
 local currentRelevantContract
 local currentQuestEntries    = {}
 local minuteUpdateGeneration = 0
@@ -273,11 +273,12 @@ local layoutGeneration  = 0
 local pendingQuestIDs   = {}   -- [questID] = { needsQuestData, needsRewardData, questDataRefreshDone, searchRefreshOnRewardReady }
 -- Tracks which questIDs have been requested via RequestLoadQuestByID this
 -- session to avoid redundant server requests.
-local requestedQuestData = {}  -- [questID] = true
+local requestedQuestData = {}  -- [questID] = requestedAt timestamp
 local questDataRetrySuppressedUntil = {} -- [questID] = GetTime() + cooldown after load failure
 local rewardPreloadState = {
     queuedQuestIDs = {},
     requestedQuestIDs = {},
+    recordedRequestTime = {},  -- Track request timestamps for timeout-based re-requests
     requestRetryCooldown = 5,
     queue = {},
     queueHead = 1,
@@ -550,6 +551,7 @@ local function PruneQuestRequestBookkeeping(activeQuestIDs)
         wipe(questDataRetrySuppressedUntil)
         wipe(rewardPreloadState.requestedQuestIDs)
         wipe(rewardPreloadState.queuedQuestIDs)
+        wipe(rewardPreloadState.recordedRequestTime)
         wipe(rewardPreloadState.queue)
         wipe(completedItemLoads)
         rewardPreloadState.queueHead = 1
@@ -589,12 +591,14 @@ local function PruneQuestRequestBookkeeping(activeQuestIDs)
         if not activeQuestIDs[questID] then
             rewardPreloadState.requestedQuestIDs[questID] = nil
             rewardPreloadState.queuedQuestIDs[questID] = nil
+            rewardPreloadState.recordedRequestTime[questID] = nil
         end
     end
 
     for questID in pairs(rewardPreloadState.queuedQuestIDs) do
         if not activeQuestIDs[questID] then
             rewardPreloadState.queuedQuestIDs[questID] = nil
+            rewardPreloadState.recordedRequestTime[questID] = nil
         end
     end
 
@@ -602,6 +606,13 @@ local function PruneQuestRequestBookkeeping(activeQuestIDs)
         local questID = tonumber(key:match("^(%d+):"))
         if not questID or not activeQuestIDs[questID] then
             completedItemLoads[key] = nil
+        end
+    end
+
+    -- Clean up any orphaned recordedRequestTime entries for quests no longer active
+    for questID in pairs(rewardPreloadState.recordedRequestTime) do
+        if not activeQuestIDs[questID] then
+            rewardPreloadState.recordedRequestTime[questID] = nil
         end
     end
 end
@@ -637,6 +648,7 @@ local function ResolvePendingQuestDataState(questID)
         searchRefreshOnRewardReady = state.searchRefreshOnRewardReady == true
         state.searchRefreshOnRewardReady = nil
         rewardPreloadState.requestedQuestIDs[questID] = nil
+        rewardPreloadState.recordedRequestTime[questID] = nil
         rewardPreloadState.queuedQuestIDs[questID] = nil
         rowNeedsUpdate = true
     end
@@ -681,14 +693,30 @@ function rewardPreloadState.HasFreshRequest(questID, now)
 
     if type(requestedAt) ~= "number" then
         rewardPreloadState.requestedQuestIDs[questID] = nil
+        rewardPreloadState.recordedRequestTime[questID] = nil
         return false
     end
 
-    if requestedAt + rewardPreloadState.requestRetryCooldown > (now or GetTime()) then
+    local currentTime = now or GetTime()
+    local retryWindow = requestedAt + rewardPreloadState.requestRetryCooldown
+    
+    -- Check cooldown: this is the primary retry gate.
+    if retryWindow > currentTime then
         return true
+    end
+    
+    -- Defensive timeout for stale metadata: if a request lingers unusually long,
+    -- clear tracking explicitly even if the cooldown gate has already elapsed.
+    local recordedTime = rewardPreloadState.recordedRequestTime[questID]
+    if recordedTime and recordedTime + 10 <= currentTime then
+        -- Timeout exceeded, clear and allow retry
+        rewardPreloadState.requestedQuestIDs[questID] = nil
+        rewardPreloadState.recordedRequestTime[questID] = nil
+        return false
     end
 
     rewardPreloadState.requestedQuestIDs[questID] = nil
+    rewardPreloadState.recordedRequestTime[questID] = nil
     return false
 end
 
@@ -703,6 +731,10 @@ function rewardPreloadState.CancelDrain()
     rewardPreloadState.drainGeneration = rewardPreloadState.drainGeneration + 1
     rewardPreloadState.drainScheduled = false
     rewardPreloadState.drainCycleCounter = 0
+    -- Explicit queue cleanup to prevent zombie queue state persisting
+    rewardPreloadState.queue = {}
+    rewardPreloadState.queueHead = 1
+    rewardPreloadState.queueTail = 0
 end
 
 function rewardPreloadState.CompactQueue()
@@ -827,6 +859,7 @@ function rewardPreloadState.ScheduleDrain()
                 and not (questDataSuppressed and not eventFrame:IsQuestCoreDataReady(questID))
             then
                 rewardPreloadState.requestedQuestIDs[questID] = now
+                rewardPreloadState.recordedRequestTime[questID] = now
                 C_TaskQuest.RequestPreloadRewardData(questID)
                 EnsureQuestDataRetryRefresh()
             end
@@ -834,6 +867,79 @@ function rewardPreloadState.ScheduleDrain()
 
         if rewardPreloadState.queueHead <= rewardPreloadState.queueTail then
             rewardPreloadState.ScheduleDrain()
+        end
+    end)
+end
+
+function rewardPreloadState.DrainSyncPass(maxItems)
+    -- Synchronously process UP TO maxItems queued items immediately
+    -- Used in RefreshPanel to drain what was queued before async schedule fires,
+    -- closing the race window where quests can get stuck.
+    local processed = 0
+    local generation = rewardPreloadState.drainGeneration
+    
+    while processed < maxItems and rewardPreloadState.queueHead <= rewardPreloadState.queueTail do
+        local questID = rewardPreloadState.queue[rewardPreloadState.queueHead]
+        rewardPreloadState.queueHead = rewardPreloadState.queueHead + 1
+        processed = processed + 1
+
+        if questID then
+            rewardPreloadState.queuedQuestIDs[questID] = nil
+        end
+        
+        if questID and rewardPreloadState.drainGeneration == generation then
+            local now = GetTime()
+            local retrySuppressedUntil = questDataRetrySuppressedUntil[questID]
+            local questDataSuppressed = retrySuppressedUntil and retrySuppressedUntil > now
+
+            -- Check if reward data ready now or if we need to retry request
+            if rewardPreloadState.IsQuestRewardDisplayReady(questID) then
+                ResolvePendingQuestDataState(questID)
+            elseif not rewardPreloadState.HasFreshRequest(questID, now)
+                and not (questDataSuppressed and not eventFrame:IsQuestCoreDataReady(questID))
+            then
+                -- Re-request if old request hasn't been fulfilled
+                C_TaskQuest.RequestPreloadRewardData(questID)
+                rewardPreloadState.requestedQuestIDs[questID] = now
+                rewardPreloadState.recordedRequestTime[questID] = now
+            end
+        elseif rewardPreloadState.drainGeneration ~= generation then
+            break  -- Generation changed, abort
+        end
+    end
+    
+    if rewardPreloadState.queueHead > rewardPreloadState.queueTail then
+        rewardPreloadState.CompactQueue()
+    end
+    
+    return processed
+end
+
+function rewardPreloadState.ScheduleFallbackGuarantee()
+    -- Schedule a safety check: if pending quests exist, force immediate poll
+    -- after 1.1 seconds to catch any quests that slipped through the drain/poll chain
+    
+    -- Only schedule if we have pending quests
+    if not next(pendingQuestIDs or {}) then
+        return
+    end
+    
+    -- Use generation token to abort previous scheduled fallback if any
+    if not rewardPreloadState.fallbackGuaranteeGeneration then
+        rewardPreloadState.fallbackGuaranteeGeneration = 0
+    end
+    rewardPreloadState.fallbackGuaranteeGeneration = rewardPreloadState.fallbackGuaranteeGeneration + 1
+    local myGeneration = rewardPreloadState.fallbackGuaranteeGeneration
+    
+    C_Timer.After(1.1, function()
+        -- If generation changed, abort
+        if rewardPreloadState.fallbackGuaranteeGeneration ~= myGeneration then
+            return
+        end
+        
+        -- If quests are STILL pending after >1s, force poll immediately
+        if next(pendingQuestIDs or {}) then
+            rewardPreloadState.PollPendingRewardData()
         end
     end)
 end
@@ -855,6 +961,7 @@ function rewardPreloadState.QueueQuestRewardPreload(questID, prioritize)
     if rewardPreloadState.IsQuestRewardDisplayReady(questID) then
         rewardPreloadState.queuedQuestIDs[questID] = nil
         rewardPreloadState.requestedQuestIDs[questID] = nil
+        rewardPreloadState.recordedRequestTime[questID] = nil
         return true
     end
 
@@ -1384,7 +1491,7 @@ local HIGHLIGHT_STATUS_INVALID = 3
 
 ---@param pin table?
 ---@return string
-function GetHoverPinIdentity(pin)
+local function GetHoverPinIdentity(pin)
     if not ns.IsDebugEnabled() then
         return ""
     end
@@ -1399,7 +1506,7 @@ end
 
 ---@param status number
 ---@return string
-function GetHoverHighlightStatusName(status)
+local function GetHoverHighlightStatusName(status)
     if type(status) == "string" then
         return status
     end
@@ -1415,8 +1522,8 @@ function GetHoverHighlightStatusName(status)
     return tostring(status)
 end
 
-function DebugRebindTransition(success, source, questID, row, rowQuestID, reason, hasPOI)
-    local rowIdentity = GetHoverRowIdentity(row)
+local function DebugRebindTransition(success, source, questID, row, rowQuestID, reason, hasPOI)
+    local rowIdentity = eventFrame._GetHoverRowIdentity(row)
     if activeHoverState._dbgLastRebindResult == success
         and activeHoverState._dbgLastRebindSource == source
         and activeHoverState._dbgLastRebindRowIdentity == rowIdentity
@@ -1424,7 +1531,7 @@ function DebugRebindTransition(success, source, questID, row, rowQuestID, reason
         return
     end
 
-    DebugHoverTrace(
+    eventFrame._DebugHoverTrace(
         "Rebind",
         "result=%s source=%s questID=%s row=%s rowQuestID=%s reason=%s poi=%s",
         success and "success" or "failure",
@@ -1718,12 +1825,12 @@ local function StopActiveWorldQuestHover(reason)
     if debugEnabled then
         local row = activeHoverState.row
         local rowQuestID = row and rawget(row, "questID") or nil
-        DebugHoverTrace(
+        eventFrame._DebugHoverTrace(
             "Stop",
             "reason=%s questID=%s row=%s rowQuestID=%s ticker=%s stopToken=%s pinMisses=%s surfaceMisses=%s",
             tostring(reason or "unspecified"),
             tostring(activeHoverState.questID),
-            GetHoverRowIdentity(row),
+            eventFrame._GetHoverRowIdentity(row),
             tostring(rowQuestID),
             tostring(activeHoverState.ticker ~= nil),
             tostring(stopToken),
@@ -1772,7 +1879,7 @@ end
 ---@return Frame? row
 local function TryRebindActiveWorldQuestHoverRow()
     local questID = activeHoverState.questID
-    if not questID or questID <= 0 then
+    if not questID or questID == 0 then
         DebugRebindTransition(false, "none", questID, nil, nil, "invalid-quest", false)
         return false, "none", nil
     end
@@ -1851,7 +1958,7 @@ local function UpdateWorldQuestPinHighlightState(questID, forceReplay)
             or activeHoverState._dbgLastPinFound ~= pinFound
             or activeHoverState._dbgLastPinIdentity ~= pinIdentity
         then
-            DebugHoverTrace(
+            eventFrame._DebugHoverTrace(
                 "PinHighlight",
                 "status=%s questID=%s pinFound=%s pin=%s pinMisses=%s forceReplay=%s countsAsPinMiss=true",
                 statusName,
@@ -1888,7 +1995,7 @@ local function UpdateWorldQuestPinHighlightState(questID, forceReplay)
     then
         local fx = rawget(pin, "_nomToolsHoverFX")
         local isPlaying = fx and fx.pulse and fx.pulse.IsPlaying and fx.pulse:IsPlaying() or false
-        DebugHoverTrace(
+        eventFrame._DebugHoverTrace(
             "PinHighlight",
             "status=%s questID=%s pinFound=%s pin=%s pinChanged=%s forceReplay=%s isPlaying=%s countsAsPinMiss=false",
             statusName,
@@ -1914,20 +2021,20 @@ end
 local function TickActiveWorldQuestHover(forceReplay)
     local questID = activeHoverState.questID
     if not questID or questID <= 0 then
-        DebugHoverTrace("Tick", "stop-trigger=invalid-quest")
+        eventFrame._DebugHoverTrace("Tick", "stop-trigger=invalid-quest")
         StopActiveWorldQuestHover("invalid-quest")
         return
     end
 
     local hovered, rebindSource, rebindRow = TryRebindActiveWorldQuestHoverRow()
     if hovered ~= activeHoverState._dbgLastHovered then
-        DebugHoverTrace(
+        eventFrame._DebugHoverTrace(
             "Tick",
             "hovered=%s questID=%s source=%s row=%s",
             tostring(hovered),
             tostring(questID),
             tostring(rebindSource),
-            GetHoverRowIdentity(rebindRow))
+            eventFrame._GetHoverRowIdentity(rebindRow))
         activeHoverState._dbgLastHovered = hovered
     end
 
@@ -1940,7 +2047,7 @@ local function TickActiveWorldQuestHover(forceReplay)
             or activeHoverState.surfaceMisses == 4
             or activeHoverState.surfaceMisses == 8
         then
-            DebugHoverTrace(
+            eventFrame._DebugHoverTrace(
                 "Tick",
                 "surface-miss milestone=%s questID=%s start=%.2f",
                 tostring(activeHoverState.surfaceMisses),
@@ -1953,7 +2060,7 @@ local function TickActiveWorldQuestHover(forceReplay)
         if (now - activeHoverState.surfaceMissStart) > 1.0
             or activeHoverState.surfaceMisses >= 8
         then
-            DebugHoverTrace(
+            eventFrame._DebugHoverTrace(
                 "Tick",
                 "stop-trigger=hover-miss questID=%s surfaceMisses=%s elapsed=%.2f",
                 tostring(questID),
@@ -1966,7 +2073,7 @@ local function TickActiveWorldQuestHover(forceReplay)
 
     local status, countsAsPinMiss = UpdateWorldQuestPinHighlightState(questID, forceReplay)
     if status == HIGHLIGHT_STATUS_INVALID then
-        DebugHoverTrace("Tick", "stop-trigger=invalid-highlight")
+        eventFrame._DebugHoverTrace("Tick", "stop-trigger=invalid-highlight")
         StopActiveWorldQuestHover("invalid-highlight")
         return
     end
@@ -1976,7 +2083,7 @@ local function TickActiveWorldQuestHover(forceReplay)
         local missStart = activeHoverState.pinMissStart or now
         local pinMisses = activeHoverState.pinMisses or 0
         if pinMisses == 1 or pinMisses == 4 or pinMisses == 8 then
-            DebugHoverTrace(
+            eventFrame._DebugHoverTrace(
                 "Tick",
                 "pin-miss milestone=%s questID=%s start=%.2f",
                 tostring(pinMisses),
@@ -1984,7 +2091,17 @@ local function TickActiveWorldQuestHover(forceReplay)
                 tonumber(missStart) or 0)
         end
         if (now - missStart) > 1.0 or activeHoverState.pinMisses >= 8 then
-            DebugHoverTrace(
+            if hovered then
+                -- Keep list-row hover active while the row/surfaces remain hovered.
+                eventFrame._DebugHoverTrace(
+                    "Tick",
+                    "pin-miss tolerated while-hovered questID=%s pinMisses=%s elapsed=%.2f",
+                    tostring(questID),
+                    tostring(activeHoverState.pinMisses or 0),
+                    now - missStart)
+                return
+            end
+            eventFrame._DebugHoverTrace(
                 "Tick",
                 "stop-trigger=pin-miss questID=%s pinMisses=%s elapsed=%.2f",
                 tostring(questID),
@@ -1998,7 +2115,7 @@ local function TickActiveWorldQuestHover(forceReplay)
     if not activeHoverState._dbgLastTickLogTime
         or (now - activeHoverState._dbgLastTickLogTime) >= 1.0
     then
-        DebugHoverTrace(
+        eventFrame._DebugHoverTrace(
             "TickHeartbeat",
             "questID=%s hovered=%s status=%s pinMisses=%s surfaceMisses=%s",
             tostring(questID),
@@ -2019,12 +2136,12 @@ local function EnsureActiveWorldQuestHoverTicker()
         or not C_Timer.NewTicker
     then
         if activeHoverState.ticker and questID and questID > 0 then
-            DebugHoverTrace("Ticker", "already-running questID=%s", tostring(questID))
+            eventFrame._DebugHoverTrace("Ticker", "already-running questID=%s", tostring(questID))
         end
         return
     end
 
-    DebugHoverTrace("Ticker", "create questID=%s", tostring(questID))
+    eventFrame._DebugHoverTrace("Ticker", "create questID=%s", tostring(questID))
     activeHoverState.ticker = C_Timer.NewTicker(0.15, function()
         TickActiveWorldQuestHover(false)
     end)
@@ -2034,14 +2151,14 @@ end
 ---@param questID number?
 ---@param forceReplay boolean?
 activeHoverState.StartOrResume = function(row, questID, forceReplay, source, context)
-    if not questID or questID <= 0 then
+    if not questID or questID == 0 then
         return
     end
 
     local previousQuestID = activeHoverState.questID
     local rowQuestID = row and rawget(row, "questID") or nil
     local rowHovered = IsQuestRowActuallyHovered(row)
-    DebugHoverTrace(
+    eventFrame._DebugHoverTrace(
         "StartOrResume",
         "source=%s context=%s questID=%s previousQuestID=%s forceReplay=%s questSwitch=%s row=%s rowQuestID=%s rowHovered=%s",
         tostring(source or "unknown"),
@@ -2050,7 +2167,7 @@ activeHoverState.StartOrResume = function(row, questID, forceReplay, source, con
         tostring(previousQuestID),
         tostring(forceReplay == true),
         tostring(previousQuestID ~= questID),
-        GetHoverRowIdentity(row),
+        eventFrame._GetHoverRowIdentity(row),
         tostring(rowQuestID),
         tostring(rowHovered))
 
@@ -2073,19 +2190,26 @@ activeHoverState.StartOrResume = function(row, questID, forceReplay, source, con
     end
 
     ResetActiveWorldQuestHoverSurfaceMisses()
+
+    if questID <= 0 then
+        -- Synthetic locked assignments should show list-row hover only.
+        ResetActiveWorldQuestHoverPinMisses()
+        return
+    end
+
     EnsureActiveWorldQuestHoverTicker()
     TickActiveWorldQuestHover(forceReplay)
 end
 
 ---@param questID number?
 activeHoverState.DeferStop = function(questID, reason)
-    if not questID or questID <= 0 then
+    if not questID or questID == 0 then
         return
     end
 
     local stopToken = (activeHoverState.stopToken or 0) + 1
     activeHoverState.stopToken = stopToken
-    DebugHoverTrace(
+    eventFrame._DebugHoverTrace(
         "DeferStop",
         "scheduled token=%s reason=%s questID=%s",
         tostring(stopToken),
@@ -2094,17 +2218,17 @@ activeHoverState.DeferStop = function(questID, reason)
 
     if not C_Timer or not C_Timer.After then
         if activeHoverState.questID == questID and not TryRebindActiveWorldQuestHoverRow() then
-            DebugHoverTrace("DeferStop", "callback outcome=stopped reason=no-timer")
+            eventFrame._DebugHoverTrace("DeferStop", "callback outcome=stopped reason=no-timer")
             StopActiveWorldQuestHover("leave")
         else
-            DebugHoverTrace("DeferStop", "callback outcome=kept reason=rebind-or-quest-mismatch")
+            eventFrame._DebugHoverTrace("DeferStop", "callback outcome=kept reason=rebind-or-quest-mismatch")
         end
         return
     end
 
     C_Timer.After(0, function()
         if activeHoverState.stopToken ~= stopToken or activeHoverState.questID ~= questID then
-            DebugHoverTrace(
+            eventFrame._DebugHoverTrace(
                 "DeferStop",
                 "callback outcome=kept reason=token-or-quest-changed token=%s liveToken=%s liveQuestID=%s",
                 tostring(stopToken),
@@ -2114,10 +2238,10 @@ activeHoverState.DeferStop = function(questID, reason)
         end
         if TryRebindActiveWorldQuestHoverRow() then
             ResetActiveWorldQuestHoverSurfaceMisses()
-            DebugHoverTrace("DeferStop", "callback outcome=kept reason=rebind-hovered")
+            eventFrame._DebugHoverTrace("DeferStop", "callback outcome=kept reason=rebind-hovered")
             return
         end
-        DebugHoverTrace("DeferStop", "callback outcome=stopped reason=leave")
+        eventFrame._DebugHoverTrace("DeferStop", "callback outcome=stopped reason=leave")
         StopActiveWorldQuestHover("leave")
     end)
 end
@@ -2133,12 +2257,12 @@ activeHoverState.ResumeForShownRow = function(row, source)
     end
 
     local isHovered = IsQuestRowActuallyHovered(row)
-    DebugHoverTrace(
+    eventFrame._DebugHoverTrace(
         "ResumeForShownRow",
         "source=%s questID=%s row=%s hovered=%s",
         tostring(source or "unknown"),
         tostring(rowQuestID),
-        GetHoverRowIdentity(row),
+        eventFrame._GetHoverRowIdentity(row),
         tostring(isHovered))
 
     if isHovered then
@@ -2676,12 +2800,24 @@ function eventFrame:QueueQuestCoreDataLoad(questID)
         return false
     end
 
-    if requestedQuestData[questID] then
-        return false
+    local requestedAt = requestedQuestData[questID]
+    if requestedAt then
+        if type(requestedAt) ~= "number" then
+            requestedQuestData[questID] = nil
+            requestedAt = nil
+        end
+
+        if requestedAt and requestedAt + QUEST_CORE_DATA_REQUEST_STALE_TIMEOUT > now then
+            return true
+        end
+
+        if requestedAt then
+            requestedQuestData[questID] = nil
+        end
     end
 
     C_QuestLog.RequestLoadQuestByID(questID)
-    requestedQuestData[questID] = true
+    requestedQuestData[questID] = now
     return false
 end
 
@@ -3590,6 +3726,11 @@ local function BuildSortedZoneGroups(quests)
     return zoneGroups
 end
 
+local AppendRawQuestEntriesForMap
+local BuildQuestEntriesFromRawEntries
+local GetRelevantWorldQuestQuerySignature
+local IsQuestEntryStillVisible
+
 do
 local function IsMapWithinParentChain(candidateMapID, rootMapID)
     if candidateMapID == rootMapID then
@@ -3906,7 +4047,7 @@ function eventFrame:BuildRelevantWorldQuestMapQueryState(mapID)
     return result
 end
 
-local function GetRelevantWorldQuestQuerySignature(queryState, mapID)
+GetRelevantWorldQuestQuerySignature = function(queryState, mapID)
     if queryState and queryState.querySignature and queryState.querySignature ~= "" then
         return queryState.querySignature
     end
@@ -4053,7 +4194,7 @@ local function AppendLockedAreaPOIRawEntry(
     seen[syntheticID] = #rawEntries
 end
 
-local function AppendRawQuestEntriesForMap(
+AppendRawQuestEntriesForMap = function(
     rawEntries,
     seen,
     mapsToQuery,
@@ -4155,7 +4296,7 @@ local function AppendRawQuestEntriesForMap(
     end
 end
 
-local function IsQuestEntryStillVisible(entry)
+IsQuestEntryStillVisible = function(entry)
     local questID = entry and entry.questID or nil
     return entry
         and (entry.isAreaPOI == true
@@ -4169,7 +4310,7 @@ local function IsAreaPOIWidgetShown(widgetInfo)
     return shownState ~= false and shownState ~= 0
 end
 
-local function BuildQuestEntriesFromRawEntries(rawEntries, mapsToQuery)
+BuildQuestEntriesFromRawEntries = function(rawEntries, mapsToQuery)
     local activePendingQuestIDs = {}
     local gatherTime = GetTime()
 
@@ -4232,6 +4373,7 @@ local function BuildQuestEntriesFromRawEntries(rawEntries, mapsToQuery)
                 elseif not HaveQuestRewardData or HaveQuestRewardData(questID) then
                     rewardPreloadState.requestedQuestIDs[questID] = nil
                     rewardPreloadState.queuedQuestIDs[questID] = nil
+                    rewardPreloadState.recordedRequestTime[questID] = nil
                 end
 
                 if not needsQuestData and not needsRewardData then
@@ -4244,6 +4386,7 @@ local function BuildQuestEntriesFromRawEntries(rawEntries, mapsToQuery)
             questDataRetrySuppressedUntil[questID] = nil
             rewardPreloadState.requestedQuestIDs[questID] = nil
             rewardPreloadState.queuedQuestIDs[questID] = nil
+            rewardPreloadState.recordedRequestTime[questID] = nil
         end
     end
 
@@ -4848,6 +4991,10 @@ local function BuildQuestEntriesFromRawEntries(rawEntries, mapsToQuery)
 
     return result, hiddenRewardPreloadQuestIDs
 end
+
+end
+
+do
 
 local function ShouldStageDescendantGather(queryState)
     local queryMapIDs = queryState and queryState.queryMapIDs or nil
@@ -6005,13 +6152,27 @@ function eventFrame:RefreshActiveQuestTooltipIfReady(questID)
     ShowQuestTooltip(activeTooltipAnchor, questID, activeTooltipShowTrackHint)
 end
 
+local AcquireQuestRow
+local ReleaseQuestRow
+local AcquireZoneHeader
+local ReleaseZoneHeader
+local UpdateQuestRowTimeDisplay
+local GetQuestRowHeight
+local ApplyQuestRowLayout
+local ResetQuestRowRewards
+local ApplyQuestRowTitleColor
+local IsLockedSpecialAssignmentEntry
+local HasVisibleLockedSpecialAssignmentUnlock
+
+do
+
 -- =============================================
 -- Frame pooling helpers
 -- =============================================
 
 -- Returns an inactive quest row frame or creates a new one.
 -- parent: Frame
-local function AcquireQuestRow(parent)
+AcquireQuestRow = function(parent)
     local row = table.remove(questRowPool)
     if row then
         row:SetParent(parent)
@@ -6123,7 +6284,7 @@ local function AcquireQuestRow(parent)
                 end
             end
         end
-        DebugHoverTrace(
+        eventFrame._DebugHoverTrace(
             "POI.OnEnter",
             "questID=%s rowHovered=%s poiHovered=%s contractHovered=%s rewardHovered=%s call=StartOrResume",
             tostring(qid),
@@ -6164,7 +6325,7 @@ local function AcquireQuestRow(parent)
                 end
             end
         end
-        DebugHoverTrace(
+        eventFrame._DebugHoverTrace(
             "POI.OnLeave",
             "questID=%s rowHovered=%s poiHovered=%s contractHovered=%s rewardHovered=%s call=DeferStop",
             tostring(qid),
@@ -6408,8 +6569,8 @@ local function AcquireQuestRow(parent)
             local parentRow = self:GetParent()
             local qid = self.questID or (parentRow and parentRow.questID) or nil
             GameTooltip:Hide()
-            if GameTooltip_HideShoppingTooltips then
-                GameTooltip_HideShoppingTooltips()
+            if GameTooltip_HideShoppingTooltips and GameTooltip then
+                GameTooltip_HideShoppingTooltips(GameTooltip)
             end
             activeHoverState.DeferStop(qid, "reward-onleave")
         end)
@@ -6465,7 +6626,7 @@ local function AcquireQuestRow(parent)
                 end
             end
         end
-        DebugHoverTrace(
+        eventFrame._DebugHoverTrace(
             "Row.OnEnter",
             "questID=%s rowHovered=%s poiHovered=%s contractHovered=%s rewardHovered=%s call=StartOrResume",
             tostring(self.questID),
@@ -6504,7 +6665,7 @@ local function AcquireQuestRow(parent)
                 end
             end
         end
-        DebugHoverTrace(
+        eventFrame._DebugHoverTrace(
             "Row.OnLeave",
             "questID=%s rowHovered=%s poiHovered=%s contractHovered=%s rewardHovered=%s call=DeferStop",
             tostring(self.questID),
@@ -6579,17 +6740,17 @@ end
 
 -- Returns a row to the pool after hiding and detaching it.
 -- row: Frame
-local function ReleaseQuestRow(row, skipTooltipCheck)
+ReleaseQuestRow = function(row, skipTooltipCheck)
     if row.fadeIn then
         row.fadeIn:Stop()
     end
     if activeHoverState.row == row then
-        DebugHoverTrace(
+        eventFrame._DebugHoverTrace(
             "ReleaseQuestRow",
             "releasing-active-row rowQuestID=%s activeQuestID=%s row=%s",
             tostring(rawget(row, "questID")),
             tostring(activeHoverState.questID),
-            GetHoverRowIdentity(row))
+            eventFrame._GetHoverRowIdentity(row))
     end
     if activeHoverState.row == row then
         activeHoverState.row = nil
@@ -6667,7 +6828,7 @@ end
 
 -- Returns an inactive zone header frame or creates a new one.
 -- parent: Frame
-local function AcquireZoneHeader(parent)
+AcquireZoneHeader = function(parent)
     local hdr = table.remove(zoneHeaderPool)
     if hdr then
         hdr:SetParent(parent)
@@ -6727,7 +6888,7 @@ end
 
 -- Returns a zone header to the pool.
 -- hdr: Frame
-local function ReleaseZoneHeader(hdr)
+ReleaseZoneHeader = function(hdr)
     hdr:Hide()
     hdr:SetParent(nil)
     hdr:ClearAllPoints()
@@ -6738,7 +6899,7 @@ end
 -- Populating a quest row with data
 -- =============================================
 
-local function UpdateQuestRowTimeDisplay(row, entry)
+UpdateQuestRowTimeDisplay = function(row, entry)
     local now = GetCurrentServerTime()
 
     if entry.isAreaPOI and entry.areaPOITimeText
@@ -6761,7 +6922,7 @@ local function UpdateQuestRowTimeDisplay(row, entry)
     row.timeDot:Show()
 end
 
-local function GetQuestRowHeight(entry)
+GetQuestRowHeight = function(entry)
     if entry and entry.isAreaPOI == true then
         return ROW_HEIGHT
     end
@@ -6773,7 +6934,7 @@ local function GetQuestRowHeight(entry)
     return ROW_HEIGHT
 end
 
-local function ApplyQuestRowLayout(row, entry)
+ApplyQuestRowLayout = function(row, entry)
     local isLocked = entry and entry.isLocked == true
 
     row:SetHeight(GetQuestRowHeight(entry))
@@ -6814,7 +6975,7 @@ local function ApplyQuestRowLayout(row, entry)
     end
 end
 
-local function ResetQuestRowRewards(row)
+ResetQuestRowRewards = function(row)
     for iconIdx = 1, MAX_REWARD_ICONS do
         local btn = row.rewardIcons[iconIdx]
         btn:Hide()
@@ -6846,7 +7007,7 @@ local function ResetQuestRowRewards(row)
     row.moneyText:Hide()
 end
 
-local function ApplyQuestRowTitleColor(titleText, questID, isLocked, isPendingTitle)
+ApplyQuestRowTitleColor = function(titleText, questID, isLocked, isPendingTitle)
     local superTrackedID = C_SuperTrack and C_SuperTrack.GetSuperTrackedQuestID
         and C_SuperTrack.GetSuperTrackedQuestID() or nil
 
@@ -6863,7 +7024,7 @@ local function ApplyQuestRowTitleColor(titleText, questID, isLocked, isPendingTi
     end
 end
 
-local function IsLockedSpecialAssignmentEntry(entry)
+IsLockedSpecialAssignmentEntry = function(entry)
     if not entry or entry.isLocked ~= true then
         return false
     end
@@ -6874,7 +7035,7 @@ local function IsLockedSpecialAssignmentEntry(entry)
         entry.questType)
 end
 
-local function HasVisibleLockedSpecialAssignmentUnlock()
+HasVisibleLockedSpecialAssignmentUnlock = function()
     if not questMapPanel or not questMapPanel:IsShown() then
         return false
     end
@@ -6898,61 +7059,34 @@ local function HasVisibleLockedSpecialAssignmentUnlock()
     return false
 end
 
+end
+
 do
-    local GetLiveLockedAreaPOIWidgetFingerprint
-
-    local function BuildVisibleLockedAreaPOISnapshotPart(questID, mapID, poiID, poiInfo,
-        fallbackName, fallbackDescription, fallbackWidgetSetID)
-        local poiName = poiInfo and poiInfo.name or fallbackName or ""
-        local poiDescription = poiInfo and poiInfo.description or fallbackDescription or ""
-        local atlasName = poiInfo and poiInfo.atlasName or ""
-        local widgetSetID = poiInfo and poiInfo.tooltipWidgetSet
-            or fallbackWidgetSetID or 0
-        local widgetCount, widgetFingerprint, widgetPayloadFingerprint =
-            GetLiveLockedAreaPOIWidgetFingerprint(widgetSetID)
-
-        return string_format(
-            "%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s",
-            tostring(questID or 0),
-            tostring(mapID or 0),
-            tostring(poiID or 0),
-            poiInfo and "1" or "0",
-            atlasName,
-            tostring(widgetSetID or 0),
-            tostring(widgetCount),
-            tostring(widgetFingerprint),
-            tostring(widgetPayloadFingerprint),
-            poiName,
-            NormalizeInlineQuestText(poiDescription) or "")
-    end
-
-    local function CompareLockedAreaPOIWidgets(leftWidget, rightWidget)
-        local leftOrder = leftWidget.orderIndex or 0
-        local rightOrder = rightWidget.orderIndex or 0
-        if leftOrder ~= rightOrder then
-            return leftOrder < rightOrder
-        end
-
-        local leftType = leftWidget.widgetType or 0
-        local rightType = rightWidget.widgetType or 0
-        if leftType ~= rightType then
-            return leftType < rightType
-        end
-
-        return (leftWidget.widgetID or 0) < (rightWidget.widgetID or 0)
-    end
-
-    local function AccumulateLockedAreaPOIWidgetHash(hash, value)
-        return ((hash * 131) + (value or 0) + 1) % 2147483647
-    end
-
     do
-        local LOCKED_AREA_POI_TIMER_TEXT_HASH = "__timer__"
+        local function CompareLockedAreaPOIWidgets(leftWidget, rightWidget)
+            local leftOrder = leftWidget.orderIndex or 0
+            local rightOrder = rightWidget.orderIndex or 0
+            if leftOrder ~= rightOrder then
+                return leftOrder < rightOrder
+            end
+
+            local leftType = leftWidget.widgetType or 0
+            local rightType = rightWidget.widgetType or 0
+            if leftType ~= rightType then
+                return leftType < rightType
+            end
+
+            return (leftWidget.widgetID or 0) < (rightWidget.widgetID or 0)
+        end
+
+        local function AccumulateLockedAreaPOIWidgetHash(hash, value)
+            return ((hash * 131) + (value or 0) + 1) % 2147483647
+        end
 
         local function AccumulateLockedAreaPOIWidgetTextHash(hash, text, normalizeTimerText)
             local normalizedText = NormalizeInlineQuestText(text)
             if normalizeTimerText and normalizedText then
-                normalizedText = LOCKED_AREA_POI_TIMER_TEXT_HASH
+                normalizedText = "__timer__"
             end
 
                 normalizedText = normalizedText or ""
@@ -6965,7 +7099,7 @@ do
             return hash
         end
 
-        local function AccumulateLockedAreaPOICurrencyPayloadHash(hash, currencies)
+        eventFrame._AccumulateLockedAreaPOICurrencyPayloadHash = function(hash, currencies)
             local currencyCount = currencies and #currencies or 0
 
             hash = AccumulateLockedAreaPOIWidgetHash(hash, currencyCount)
@@ -7040,12 +7174,16 @@ do
 
                 hash = AccumulateLockedAreaPOIWidgetHash(hash, info and 1 or 0)
                 hash = AccumulateLockedAreaPOIWidgetTextHash(hash, info and info.text or nil)
-                hash = AccumulateLockedAreaPOICurrencyPayloadHash(hash, info and info.currencies or nil)
+                hash = eventFrame._AccumulateLockedAreaPOICurrencyPayloadHash(
+                    hash,
+                    info and info.currencies or nil)
             elseif widgetType == 9 and C_UIWidgetManager.GetHorizontalCurrenciesWidgetVisualizationInfo then
                 local info = C_UIWidgetManager.GetHorizontalCurrenciesWidgetVisualizationInfo(widgetID)
 
                 hash = AccumulateLockedAreaPOIWidgetHash(hash, info and 1 or 0)
-                hash = AccumulateLockedAreaPOICurrencyPayloadHash(hash, info and info.currencies or nil)
+                hash = eventFrame._AccumulateLockedAreaPOICurrencyPayloadHash(
+                    hash,
+                    info and info.currencies or nil)
             elseif widgetType == 13 and C_UIWidgetManager.GetSpellDisplayVisualizationInfo then
                 local info = C_UIWidgetManager.GetSpellDisplayVisualizationInfo(widgetID)
                 local spellInfo = info and info.spellInfo or nil
@@ -7067,7 +7205,7 @@ do
             return hash
         end
 
-        GetLiveLockedAreaPOIWidgetFingerprint = function(widgetSetID)
+        eventFrame._GetLiveLockedAreaPOIWidgetFingerprint = function(widgetSetID)
             if not widgetSetID or widgetSetID <= 0 or not C_UIWidgetManager
                 or not C_UIWidgetManager.GetAllWidgetsBySetID
             then
@@ -7119,7 +7257,7 @@ do
     local function BuildLiveRelevantAreaPOISnapshotPart(questID, mapID, poiID, poiInfo)
         local widgetSetID = poiInfo and poiInfo.tooltipWidgetSet or 0
         local widgetCount, widgetFingerprint, widgetPayloadFingerprint =
-            GetLiveLockedAreaPOIWidgetFingerprint(widgetSetID)
+            eventFrame._GetLiveLockedAreaPOIWidgetFingerprint(widgetSetID)
 
         return string_format(
             "%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s",
@@ -7192,7 +7330,32 @@ do
         return false
     end
 
-    local function BuildVisibleLockedAreaPOISnapshot()
+    local function BuildVisibleLockedAreaPOISnapshotPart(questID, mapID, poiID, poiInfo,
+        fallbackName, fallbackDescription, fallbackWidgetSetID)
+        local poiName = poiInfo and poiInfo.name or fallbackName or ""
+        local poiDescription = poiInfo and poiInfo.description or fallbackDescription or ""
+        local atlasName = poiInfo and poiInfo.atlasName or ""
+        local widgetSetID = poiInfo and poiInfo.tooltipWidgetSet
+            or fallbackWidgetSetID or 0
+        local widgetCount, widgetFingerprint, widgetPayloadFingerprint =
+            eventFrame._GetLiveLockedAreaPOIWidgetFingerprint(widgetSetID)
+
+        return string_format(
+            "%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s",
+            tostring(questID or 0),
+            tostring(mapID or 0),
+            tostring(poiID or 0),
+            poiInfo and "1" or "0",
+            atlasName,
+            tostring(widgetSetID or 0),
+            tostring(widgetCount),
+            tostring(widgetFingerprint),
+            tostring(widgetPayloadFingerprint),
+            poiName,
+            NormalizeInlineQuestText(poiDescription) or "")
+    end
+
+    eventFrame._BuildVisibleLockedAreaPOISnapshot = function()
         if not currentQuestEntries or #currentQuestEntries == 0 then
             return nil
         end
@@ -7234,7 +7397,7 @@ do
         return table.concat(parts, "\031", 1, partCount)
     end
 
-    local function BuildLiveRelevantAreaPOISnapshot(mapID)
+    eventFrame._BuildLiveRelevantAreaPOISnapshot = function(mapID)
         if not mapID
             or not C_AreaPoiInfo
             or not C_AreaPoiInfo.GetAreaPOIForMap
@@ -7368,12 +7531,12 @@ do
     end
 
     function eventFrame:SyncLiveRelevantAreaPOISnapshot(mapID)
-        local parts, partCount = BuildLiveRelevantAreaPOISnapshot(mapID)
+        local parts, partCount = eventFrame._BuildLiveRelevantAreaPOISnapshot(mapID)
         SetLiveRelevantAreaPOISnapshotParts(parts or {}, partCount or 0)
     end
 
     function eventFrame:HasLiveRelevantAreaPOIStateChange(mapID)
-        local parts, partCount = BuildLiveRelevantAreaPOISnapshot(mapID)
+        local parts, partCount = eventFrame._BuildLiveRelevantAreaPOISnapshot(mapID)
         parts = parts or {}
         partCount = partCount or 0
 
@@ -7386,11 +7549,11 @@ do
     end
 
     function eventFrame:SyncVisibleLockedAreaPOISnapshot()
-        self._visibleLockedAreaPOISnapshot = BuildVisibleLockedAreaPOISnapshot()
+        self._visibleLockedAreaPOISnapshot = eventFrame._BuildVisibleLockedAreaPOISnapshot()
     end
 
     function eventFrame:HasVisibleLockedAreaPOIStateChange()
-        local snapshot = BuildVisibleLockedAreaPOISnapshot()
+        local snapshot = eventFrame._BuildVisibleLockedAreaPOISnapshot()
         if snapshot ~= self._visibleLockedAreaPOISnapshot then
             self._visibleLockedAreaPOISnapshot = snapshot
             return true
@@ -7424,10 +7587,14 @@ function ns.HasVisibleQuestRemoval()
     return false
 end
 
+local RefreshPanel
+
+do
+
 -- Applies quest data to a row frame.
 -- row: Frame from AcquireQuestRow()
 -- entry: enriched quest entry from GatherQuestsForCurrentMap()
-local function PopulateQuestRow(row, entry, animate)
+eventFrame._PopulateQuestRow = function(row, entry, animate)
     local questID = entry.questID
     local rewardTopOffset = -37
     row.questID = questID
@@ -7820,12 +7987,12 @@ local function PopulateQuestRow(row, entry, animate)
     end
 
     if activeHoverState.questID and row.questID == activeHoverState.questID then
-        DebugHoverTrace(
+        eventFrame._DebugHoverTrace(
             "RowShow",
             "phase=populate questID=%s animate=%s row=%s",
             tostring(row.questID),
             tostring(animate),
-            GetHoverRowIdentity(row))
+            eventFrame._GetHoverRowIdentity(row))
     end
 
     if activeHoverState.questID == questID then
@@ -7851,7 +8018,7 @@ local function ClearActiveContent()
         end
     end
     if #activeContent > 0 then
-        DebugHoverTrace(
+        eventFrame._DebugHoverTrace(
             "ClearActiveContent",
             "items=%s rows=%s zones=%s hoverQuestID=%s",
             tostring(#activeContent),
@@ -8058,7 +8225,7 @@ local function LayoutScrollContent(quests, animateRows)
 
     if eventFrame._hoverLastLayoutGenLogged ~= myGen then
         eventFrame._hoverLastLayoutGenLogged = myGen
-        DebugHoverTrace(
+        eventFrame._DebugHoverTrace(
             "LayoutSummary",
             "gen=%s reason=%s questCount=%s visible=%s deferred=%s animateRows=%s activeHoverQuestID=%s",
             tostring(myGen),
@@ -8082,7 +8249,7 @@ local function LayoutScrollContent(quests, animateRows)
             while visIdx <= #visibleRowItems do
                 local item = visibleRowItems[visIdx]
                 if item._entry ~= nil then
-                    PopulateQuestRow(item.frame, item._entry, nil)
+                    eventFrame._PopulateQuestRow(item.frame, item._entry, nil)
                     item._entry = nil
                 end
                 visIdx = visIdx + 1
@@ -8136,7 +8303,7 @@ local function LayoutScrollContent(quests, animateRows)
                     row.mapName = item._entry.mapName
                     item.frame = row
                 end
-                PopulateQuestRow(item.frame, item._entry, false)
+                eventFrame._PopulateQuestRow(item.frame, item._entry, false)
                 item._entry = nil
                 if ns.IsDebugEnabled() then
                     ns.DebugPrint(string_format(
@@ -8175,7 +8342,7 @@ local function LayoutScrollContent(quests, animateRows)
                     row.mapName = item._entry.mapName
                     item.frame = row
                 end
-                PopulateQuestRow(item.frame, item._entry, false)
+                eventFrame._PopulateQuestRow(item.frame, item._entry, false)
                 item._entry = nil
                 if ns.IsDebugEnabled() then
                     ns.DebugPrint(string_format(
@@ -8242,11 +8409,11 @@ local function LayoutScrollContent(quests, animateRows)
                 row:SetAlpha(1)
             end
             if activeHoverState.questID and row.questID == activeHoverState.questID then
-                DebugHoverTrace(
+                eventFrame._DebugHoverTrace(
                     "RowShow",
                     "phase=reveal-visible questID=%s row=%s",
                     tostring(row.questID),
-                    GetHoverRowIdentity(row))
+                    eventFrame._GetHoverRowIdentity(row))
             end
             activeHoverState.ResumeForShownRow(row, "reveal-visible")
 
@@ -8283,11 +8450,11 @@ local function LayoutScrollContent(quests, animateRows)
                         row:Show()
                     end
                     if activeHoverState.questID and row.questID == activeHoverState.questID then
-                        DebugHoverTrace(
+                        eventFrame._DebugHoverTrace(
                             "RowShow",
                             "phase=show-ready questID=%s row=%s",
                             tostring(row.questID),
-                            GetHoverRowIdentity(row))
+                            eventFrame._GetHoverRowIdentity(row))
                     end
                     activeHoverState.ResumeForShownRow(row, "show-ready")
                 else
@@ -8314,7 +8481,7 @@ end
 -- =============================================
 
 -- Refreshes the panel contents from the current map.
-local function RefreshPanel(animateRows, reason)
+RefreshPanel = function(animateRows, reason)
     if not ns.IsWorldQuestsRefreshContextActive() then return end
 
     local s = GetSettings()
@@ -8371,9 +8538,7 @@ local function RefreshPanel(animateRows, reason)
                 elseif not pendingQuestIDs[questID].needsRewardData then
                     pendingQuestIDs[questID].needsRewardData = true
                 end
-                if animateRows == false then
-                    rewardPreloadState.QueueQuestRewardPreload(questID, false)
-                end
+                rewardPreloadState.QueueQuestRewardPreload(questID, false)
             end
         end
     end
@@ -8383,6 +8548,10 @@ local function RefreshPanel(animateRows, reason)
         end
     end
     rewardPreloadState.StartPoll()
+    -- Synchronously drain up to 25 items to close the race window
+    rewardPreloadState.DrainSyncPass(25)
+    -- Schedule a fallback guarantee to catch any remaining pending quests
+    rewardPreloadState.ScheduleFallbackGuarantee()
     local syncPOIElapsed = 0
     if not isDescendantGatherPending then
         local shouldSyncLiveAreaPOIs = eventFrame._lastLiveRelevantAreaPOISnapshotCount == nil
@@ -8429,7 +8598,9 @@ local function RefreshPanel(animateRows, reason)
     LayoutScrollContent(quests, not isDescendantGatherPending and animateRows ~= false)
 end
 
-local function GetDelayUntilNextServerMinute()
+end
+
+eventFrame._GetDelayUntilNextServerMinute = function()
     local serverTime = GetCurrentServerTime()
     local delay = 60 - (serverTime % 60)
     if delay <= 0 then
@@ -8623,10 +8794,10 @@ EnsureMinuteAlignedTimeUpdates = function()
         end
 
         UpdateCurrentQuestTimeState()
-        C_Timer.After(GetDelayUntilNextServerMinute(), tick)
+        C_Timer.After(eventFrame._GetDelayUntilNextServerMinute(), tick)
     end
 
-    C_Timer.After(GetDelayUntilNextServerMinute(), tick)
+    C_Timer.After(eventFrame._GetDelayUntilNextServerMinute(), tick)
 end
 
 StopMinuteAlignedTimeUpdates = function()
@@ -8673,7 +8844,7 @@ ScheduleRefresh = function(animateRows, reason, immediate)
                     tostring(eventFrame._refreshPendingReason)))
         end
         if activeHoverState.questID then
-            DebugHoverTrace(
+            eventFrame._DebugHoverTrace(
                 "ScheduleRefresh",
                 "phase=coalesced reason=%s animate=%s pendingAnimate=%s pendingReason=%s activeQuestID=%s",
                 refreshReason,
@@ -8694,7 +8865,7 @@ ScheduleRefresh = function(animateRows, reason, immediate)
             string_format("reason=%s animate=%s", refreshReason, tostring(animateRows)))
     end
     if activeHoverState.questID then
-        DebugHoverTrace(
+        eventFrame._DebugHoverTrace(
             "ScheduleRefresh",
             "phase=scheduled reason=%s animate=%s immediate=%s activeQuestID=%s",
             refreshReason,
@@ -8768,7 +8939,7 @@ function eventFrame:HandleWorldMapChanged()
                         tostring(discoveredRelevantWorldQuestQuerySignature)))
             end
             if activeHoverState.questID then
-                DebugHoverTrace(
+                eventFrame._DebugHoverTrace(
                     "HandleWorldMapChanged",
                     "trigger-refresh reason=OnMapChanged signature-change mapID=%s activeQuestID=%s",
                     tostring(mapID),
@@ -8795,7 +8966,7 @@ function eventFrame:HandleWorldMapChanged()
             string_format("mapID=%s", tostring(mapID)))
     end
     if activeHoverState.questID then
-        DebugHoverTrace(
+        eventFrame._DebugHoverTrace(
             "HandleWorldMapChanged",
             "trigger-refresh reason=OnMapChanged mapID=%s activeQuestID=%s",
             tostring(mapID),
@@ -8835,7 +9006,7 @@ function eventFrame:HandleAreaPOIsUpdated()
                 string_format("mapID=%s", tostring(mapID)))
         end
         if activeHoverState.questID then
-            DebugHoverTrace(
+            eventFrame._DebugHoverTrace(
                 "HandleAreaPOIsUpdated",
                 "trigger-refresh reason=AREA_POIS_UPDATED staged-restart mapID=%s activeQuestID=%s",
                 tostring(mapID),
@@ -8864,7 +9035,7 @@ function eventFrame:HandleAreaPOIsUpdated()
                     tostring(discoveredRelevantWorldQuestQuerySignature)))
         end
         if activeHoverState.questID then
-            DebugHoverTrace(
+            eventFrame._DebugHoverTrace(
                 "HandleAreaPOIsUpdated",
                 "trigger-refresh reason=AREA_POIS_UPDATED signature-change mapID=%s activeQuestID=%s",
                 tostring(mapID),
@@ -8892,7 +9063,7 @@ function eventFrame:HandleAreaPOIsUpdated()
             string_format("mapID=%s", tostring(mapID)))
     end
     if activeHoverState.questID then
-        DebugHoverTrace(
+        eventFrame._DebugHoverTrace(
             "HandleAreaPOIsUpdated",
             "trigger-refresh reason=AREA_POIS_UPDATED live-state-change mapID=%s activeQuestID=%s",
             tostring(mapID),
@@ -9496,7 +9667,7 @@ function eventFrame:UpdateQuestRow(questID)
         if rowEntry ~= existingEntry and rowEntry ~= currentEntry then
             CopyQuestRowEntry(rowEntry, refreshedEntry)
         end
-        PopulateQuestRow(
+        eventFrame._PopulateQuestRow(
             row,
             rowEntry,
             previousRewardDataReady == false and rowEntry.rewardDataReady == true)
@@ -9533,11 +9704,21 @@ function rewardPreloadState.PollPendingRewardData()
                 local isExpired = not requestedAt
                     or (type(requestedAt) == "number"
                         and requestedAt + rewardPreloadState.requestRetryCooldown <= now)
+                
+                -- Also check if request has timed out (>10 seconds since request)
+                if not isExpired then
+                    local recordedTime = rewardPreloadState.recordedRequestTime[questID]
+                    if recordedTime and recordedTime + 10 <= now then
+                        isExpired = true
+                    end
+                end
+                
                 if isExpired then
                     local retryAt = questDataRetrySuppressedUntil[questID]
                     if not (retryAt and retryAt > now) then
                         if C_TaskQuest and C_TaskQuest.RequestPreloadRewardData then
                             rewardPreloadState.requestedQuestIDs[questID] = now
+                            rewardPreloadState.recordedRequestTime[questID] = now
                             C_TaskQuest.RequestPreloadRewardData(questID)
                         end
                     end
@@ -9563,7 +9744,7 @@ end
 -- Creates the content panel parented to QuestMapFrame and registers it as a
 -- native side-panel tab (alongside Quests, Events, Map Legend, etc.).
 -- Safe to call multiple times — returns immediately if already created.
-local function CreateQuestMapTab()
+eventFrame._CreateQuestMapTab = function()
     if questMapPanel then return end
     if not QuestMapFrame then return end
 
@@ -10202,7 +10383,7 @@ function ns.RefreshWorldQuestsUI()
 
     -- Ensure tab exists; show it
     if not questMapPanel then
-        CreateQuestMapTab()
+        eventFrame._CreateQuestMapTab()
     end
     if questMapTab then questMapTab:Show() end
 
@@ -10230,7 +10411,7 @@ function ns.InitializeWorldQuestsModule()
     -- Build the tab and panel (deferred by one tick if QuestMapFrame children
     -- are not fully initialised yet — ContentsAnchor may have zero size).
     if QuestMapFrame then
-        CreateQuestMapTab()
+        eventFrame._CreateQuestMapTab()
     else
         -- QuestMapFrame is always present in retail but guard just in case.
         eventFrame:RegisterEvent("PLAYER_LOGIN")
@@ -10246,7 +10427,7 @@ function ns.InitializeWorldQuestsModule()
             ClearPendingDisplayModeRequest()
             return
         end
-        CreateQuestMapTab()   -- no-op if already created
+        eventFrame._CreateQuestMapTab()   -- no-op if already created
         if QuestMapFrame and QuestMapFrame.ValidateTabs then
             QuestMapFrame:ValidateTabs()
         end
@@ -10288,7 +10469,7 @@ function ns.InitializeWorldQuestsModule()
     eventFrame:SetScript("OnEvent", function(_, event, ...)
         if event == "PLAYER_LOGIN" then
             eventFrame:UnregisterEvent("PLAYER_LOGIN")
-            CreateQuestMapTab()
+            eventFrame._CreateQuestMapTab()
         elseif event == "PLAYER_REGEN_ENABLED" then
             if pendingBuiltinDisplayModeFallback then
                 RestoreBuiltinDisplayModeIfNeeded()
@@ -10380,7 +10561,7 @@ function ns.InitializeWorldQuestsModule()
                             tostring(discoveredRelevantWorldQuestQuerySignature)))
                 end
                 if activeHoverState.questID then
-                    DebugHoverTrace(
+                    eventFrame._DebugHoverTrace(
                         "QUEST_LOG_UPDATE",
                         "trigger-refresh reason=relevant-map-signature mapID=%s activeQuestID=%s",
                         tostring(activeMapID),
@@ -10408,7 +10589,7 @@ function ns.InitializeWorldQuestsModule()
                         string_format("mapID=%s", tostring(activeMapID)))
                 end
                 if activeHoverState.questID then
-                    DebugHoverTrace(
+                    eventFrame._DebugHoverTrace(
                         "QUEST_LOG_UPDATE",
                         "trigger-refresh reason=staged-quest-membership mapID=%s activeQuestID=%s",
                         tostring(activeMapID),
@@ -10457,7 +10638,7 @@ function ns.InitializeWorldQuestsModule()
                     or needsLockedAreaPOIRefresh or needsVisibleQuestRefresh
                 then
                     if activeHoverState.questID then
-                        DebugHoverTrace(
+                        eventFrame._DebugHoverTrace(
                             "QUEST_LOG_UPDATE",
                             "trigger-refresh reason=visible-or-pending-change mapID=%s activeQuestID=%s",
                             tostring(activeMapID),
@@ -10472,7 +10653,7 @@ function ns.InitializeWorldQuestsModule()
                     or needsVisibleQuestRefresh
                 then
                     if activeHoverState.questID then
-                        DebugHoverTrace(
+                        eventFrame._DebugHoverTrace(
                             "QUEST_LOG_UPDATE",
                             "trigger-refresh reason=visible-change-no-pending mapID=%s activeQuestID=%s",
                             tostring(activeMapID),
@@ -10490,7 +10671,7 @@ function ns.InitializeWorldQuestsModule()
             eventFrame:HandleAllLockedAreaPOIWidgetsUpdated()
         elseif event == "AREA_POIS_UPDATED" then
             if activeHoverState.questID then
-                DebugHoverTrace(
+                eventFrame._DebugHoverTrace(
                     "AREA_POIS_UPDATED",
                     "event-branch activeQuestID=%s dispatch=HandleAreaPOIsUpdated",
                     tostring(activeHoverState.questID))
@@ -10532,7 +10713,7 @@ function ns.InitializeWorldQuestsModule()
 
     -- If the World Map is already open at load time, populate immediately.
     if WorldMapFrame and WorldMapFrame:IsShown() then
-        CreateQuestMapTab()
+        eventFrame._CreateQuestMapTab()
         if ns.IsWorldQuestsRefreshContextActive() then
             ScheduleRefresh()
         end
